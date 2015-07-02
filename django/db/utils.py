@@ -9,7 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import six
 from django.utils._os import upath
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.deprecation import RemovedInDjango110Warning
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 
@@ -17,7 +17,7 @@ DEFAULT_DB_ALIAS = 'default'
 DJANGO_VERSION_PICKLE_KEY = '_django_version'
 
 
-class Error(Exception if six.PY3 else StandardError):
+class Error(Exception if six.PY3 else StandardError):  # NOQA: StandardError undefined on PY3
     pass
 
 
@@ -177,7 +177,7 @@ class ConnectionHandler(object):
             conn['ENGINE'] = 'django.db.backends.dummy'
         conn.setdefault('CONN_MAX_AGE', 0)
         conn.setdefault('OPTIONS', {})
-        conn.setdefault('TIME_ZONE', 'UTC' if settings.USE_TZ else settings.TIME_ZONE)
+        conn.setdefault('TIME_ZONE', None)
         for setting in ['NAME', 'USER', 'PASSWORD', 'HOST', 'PORT']:
             conn.setdefault(setting, '')
 
@@ -290,14 +290,22 @@ class ConnectionRouter(object):
                 # If the router doesn't have a method, skip to the next one.
                 continue
 
-            argspec = inspect.getargspec(router.allow_migrate)
-            if len(argspec.args) == 3 and not argspec.keywords:
+            if six.PY3:
+                sig = inspect.signature(router.allow_migrate)
+                has_deprecated_signature = not any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+            else:
+                argspec = inspect.getargspec(router.allow_migrate)
+                has_deprecated_signature = len(argspec.args) == 3 and not argspec.keywords
+
+            if has_deprecated_signature:
                 warnings.warn(
                     "The signature of allow_migrate has changed from "
                     "allow_migrate(self, db, model) to "
                     "allow_migrate(self, db, app_label, model_name=None, **hints). "
-                    "Support for the old signature will be removed in Django 2.0.",
-                    RemovedInDjango20Warning)
+                    "Support for the old signature will be removed in Django 1.10.",
+                    RemovedInDjango110Warning)
                 model = hints.get('model')
                 allow = None if model is None else method(db, model)
             else:

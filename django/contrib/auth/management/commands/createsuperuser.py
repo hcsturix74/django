@@ -50,7 +50,7 @@ class Command(BaseCommand):
         return super(Command, self).execute(*args, **options)
 
     def handle(self, *args, **options):
-        username = options.get(self.UserModel.USERNAME_FIELD, None)
+        username = options.get(self.UserModel.USERNAME_FIELD)
         database = options.get('database')
 
         # If not provided, create the user with an unusable password
@@ -101,14 +101,14 @@ class Command(BaseCommand):
                     username = self.get_input_data(self.username_field, input_msg, default_username)
                     if not username:
                         continue
-                    try:
-                        self.UserModel._default_manager.db_manager(database).get_by_natural_key(username)
-                    except self.UserModel.DoesNotExist:
-                        pass
-                    else:
-                        self.stderr.write("Error: That %s is already taken." %
-                                verbose_field_name)
-                        username = None
+                    if self.username_field.unique:
+                        try:
+                            self.UserModel._default_manager.db_manager(database).get_by_natural_key(username)
+                        except self.UserModel.DoesNotExist:
+                            pass
+                        else:
+                            self.stderr.write("Error: That %s is already taken." % verbose_field_name)
+                            username = None
 
                 for field_name in self.UserModel.REQUIRED_FIELDS:
                     field = self.UserModel._meta.get_field(field_name)

@@ -21,16 +21,16 @@ from .models import (
     FK1, X, Annotation, Article, Author, BaseA, Book, CategoryItem,
     CategoryRelationship, Celebrity, Channel, Chapter, Child, ChildObjectA,
     Classroom, Company, Cover, CustomPk, CustomPkTag, Detail, DumbCategory,
-    Eaten, Employment, ExtraInfo, Fan, Food, Identifier, Item, Job,
+    Eaten, Employment, ExtraInfo, Fan, Food, Identifier, Individual, Item, Job,
     JobResponsibilities, Join, LeafA, LeafB, LoopX, LoopZ, ManagedModel,
     Member, ModelA, ModelB, ModelC, ModelD, MyObject, NamedCategory, Node,
     Note, NullableName, Number, ObjectA, ObjectB, ObjectC, OneToOneCategory,
     Order, OrderItem, Page, Paragraph, Person, Plaything, PointerA, Program,
-    ProxyCategory, ProxyObjectA, ProxyObjectB, Ranking, Related, RelatedObject,
-    Report, ReservedName, Responsibility, School, SharedConnection,
-    SimpleCategory, SingleObject, SpecialCategory, Staff, StaffUser, Student,
-    Tag, Task, Ticket21203Child, Ticket21203Parent, Ticket23605A, Ticket23605B,
-    Ticket23605C, TvChef, Valid,
+    ProxyCategory, ProxyObjectA, ProxyObjectB, Ranking, Related,
+    RelatedIndividual, RelatedObject, Report, ReservedName, Responsibility,
+    School, SharedConnection, SimpleCategory, SingleObject, SpecialCategory,
+    Staff, StaffUser, Student, Tag, Task, Ticket21203Child, Ticket21203Parent,
+    Ticket23605A, Ticket23605B, Ticket23605C, TvChef, Valid,
 )
 
 
@@ -439,6 +439,10 @@ class Queries1Tests(BaseQuerysetTest):
             Item.objects.extra(tables=['queries_author']).select_related().order_by('name')[:1],
             ['<Item: four>']
         )
+
+    def test_error_raised_on_filter_with_dictionary(self):
+        with self.assertRaisesMessage(FieldError, 'Cannot parse keyword query as dict'):
+            Note.objects.filter({'note': 'n1', 'misc': 'foo'})
 
     def test_tickets_2076_7256(self):
         # Ordering on related tables should be possible, even if the table is
@@ -2241,17 +2245,18 @@ class QuerySetSupportsPythonIdioms(TestCase):
 
     @unittest.skipUnless(six.PY2, "Python 2 only -- Python 3 doesn't have longs.")
     def test_slicing_works_with_longs(self):
-        self.assertEqual(self.get_ordered_articles()[long(0)].name, 'Article 1')
-        self.assertQuerysetEqual(self.get_ordered_articles()[long(1):long(3)],
+        # NOQA: long undefined on PY3
+        self.assertEqual(self.get_ordered_articles()[long(0)].name, 'Article 1')  # NOQA
+        self.assertQuerysetEqual(self.get_ordered_articles()[long(1):long(3)],  # NOQA
             ["<Article: Article 2>", "<Article: Article 3>"])
-        self.assertQuerysetEqual(self.get_ordered_articles()[::long(2)],
+        self.assertQuerysetEqual(self.get_ordered_articles()[::long(2)],  # NOQA
             ["<Article: Article 1>",
             "<Article: Article 3>",
             "<Article: Article 5>",
             "<Article: Article 7>"])
 
         # And can be mixed with ints.
-        self.assertQuerysetEqual(self.get_ordered_articles()[1:long(3)],
+        self.assertQuerysetEqual(self.get_ordered_articles()[1:long(3)],  # NOQA
             ["<Article: Article 2>", "<Article: Article 3>"])
 
     def test_slicing_without_step_is_lazy(self):
@@ -3498,6 +3503,7 @@ class RelatedLookupTypeTests(TestCase):
         # child objects
         self.assertQuerysetEqual(ObjectB.objects.filter(objecta__in=[self.coa]), [])
         self.assertQuerysetEqual(ObjectB.objects.filter(objecta__in=[self.poa, self.coa]).order_by('name'), out_b)
+        self.assertQuerysetEqual(ObjectB.objects.filter(objecta__in=iter([self.poa, self.coa])).order_by('name'), out_b)
 
         # parent objects
         self.assertQuerysetEqual(ObjectC.objects.exclude(childobjecta=self.oa), out_c)
@@ -3686,3 +3692,27 @@ class TestInvalidValuesRelation(TestCase):
             Annotation.objects.filter(tag='abc')
         with self.assertRaises(ValueError):
             Annotation.objects.filter(tag__in=[123, 'abc'])
+
+
+class TestTicket24605(TestCase):
+    def test_ticket_24605(self):
+        """
+        Subquery table names should be quoted.
+        """
+        i1 = Individual.objects.create(alive=True)
+        RelatedIndividual.objects.create(related=i1)
+        i2 = Individual.objects.create(alive=False)
+        RelatedIndividual.objects.create(related=i2)
+        i3 = Individual.objects.create(alive=True)
+        i4 = Individual.objects.create(alive=False)
+
+        self.assertQuerysetEqual(
+            Individual.objects.filter(Q(alive=False), Q(related_individual__isnull=True)),
+            [i4], lambda x: x
+        )
+        self.assertQuerysetEqual(
+            Individual.objects.exclude(
+                Q(alive=False), Q(related_individual__isnull=True)
+            ).order_by('pk'),
+            [i1, i2, i3], lambda x: x
+        )

@@ -75,6 +75,7 @@ class BaseForm(object):
     # information. Any improvements to the form API should be made to *this*
     # class, not to the Form class.
     field_order = None
+    prefix = None
 
     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
                  initial=None, error_class=ErrorList, label_suffix=None,
@@ -83,7 +84,8 @@ class BaseForm(object):
         self.data = data or {}
         self.files = files or {}
         self.auto_id = auto_id
-        self.prefix = prefix
+        if prefix is not None:
+            self.prefix = prefix
         self.initial = initial or {}
         self.error_class = error_class
         # Translators: This is the default suffix added to form field labels
@@ -225,6 +227,7 @@ class BaseForm(object):
                     'field': six.text_type(bf),
                     'help_text': help_text,
                     'html_class_attr': html_class_attr,
+                    'css_classes': css_classes,
                     'field_name': bf.html_name,
                 })
 
@@ -248,6 +251,7 @@ class BaseForm(object):
                         'field': '',
                         'help_text': '',
                         'html_class_attr': html_class_attr,
+                        'css_classes': '',
                         'field_name': '',
                     })
                     output.append(last_row)
@@ -431,12 +435,6 @@ class BaseForm(object):
     def changed_data(self):
         if self._changed_data is None:
             self._changed_data = []
-            # XXX: For now we're asking the individual fields whether or not the
-            # data has changed. It would probably be more efficient to hash the
-            # initial data, store it in a hidden field, and compare a hash of the
-            # submitted data, but we'd need a way to easily get the string value
-            # for a given field. Right now, that logic is embedded in the render
-            # method of each widget.
             for name, field in self.fields.items():
                 prefixed_name = self.add_prefix(name)
                 data_value = field.widget.value_from_datadict(self.data, self.files, prefixed_name)
@@ -620,7 +618,7 @@ class BoundField(object):
                     # If this is an auto-generated default date, nix the
                     # microseconds for standardized handling. See #22502.
                     if (isinstance(data, (datetime.datetime, datetime.time)) and
-                            not getattr(self.field.widget, 'supports_microseconds', True)):
+                            not self.field.widget.supports_microseconds):
                         data = data.replace(microsecond=0)
                     self._initial_value = data
         else:

@@ -161,7 +161,7 @@ class RenameModel(Operation):
         # Get all of the related objects we need to repoint
         all_related_objects = (
             f for f in model._meta.get_fields(include_hidden=True)
-            if f.auto_created and not f.concrete and not (f.hidden or f.many_to_many)
+            if f.auto_created and not f.concrete and (not f.hidden or f.many_to_many)
         )
         # Rename the model
         state.models[app_label, self.new_name_lower] = state.models[app_label, self.old_name_lower]
@@ -169,6 +169,10 @@ class RenameModel(Operation):
         state.remove_model(app_label, self.old_name_lower)
         # Repoint the FKs and M2Ms pointing to us
         for related_object in all_related_objects:
+            if related_object.model is not model:
+                # The model being renamed does not participate in this relation
+                # directly. Rather, a superclass does.
+                continue
             # Use the new related key for self referential related objects.
             if related_object.related_model == model:
                 related_key = (app_label, self.new_name_lower)
@@ -361,6 +365,15 @@ class AlterUniqueTogether(Operation):
     def references_model(self, name, app_label=None):
         return name.lower() == self.name_lower
 
+    def references_field(self, model_name, name, app_label=None):
+        return (
+            self.references_model(model_name, app_label) and
+            (
+                not self.unique_together or
+                any((name in together) for together in self.unique_together)
+            )
+        )
+
     def describe(self):
         return "Alter %s for %s (%s constraint(s))" % (self.option_name, self.name, len(self.unique_together or ''))
 
@@ -412,6 +425,15 @@ class AlterIndexTogether(Operation):
 
     def references_model(self, name, app_label=None):
         return name.lower() == self.name_lower
+
+    def references_field(self, model_name, name, app_label=None):
+        return (
+            self.references_model(model_name, app_label) and
+            (
+                not self.index_together or
+                any((name in together) for together in self.index_together)
+            )
+        )
 
     def describe(self):
         return "Alter %s for %s (%s constraint(s))" % (self.option_name, self.name, len(self.index_together or ''))
@@ -469,6 +491,15 @@ class AlterOrderWithRespectTo(Operation):
 
     def references_model(self, name, app_label=None):
         return name.lower() == self.name_lower
+
+    def references_field(self, model_name, name, app_label=None):
+        return (
+            self.references_model(model_name, app_label) and
+            (
+                self.order_with_respect_to is None or
+                name == self.order_with_respect_to
+            )
+        )
 
     def describe(self):
         return "Set order_with_respect_to on %s to %s" % (self.name, self.order_with_respect_to)

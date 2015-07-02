@@ -1,14 +1,14 @@
 import warnings
 
-from django.db.migrations.graph import (
-    RECURSION_DEPTH_WARNING, CircularDependencyError, MigrationGraph,
-    NodeNotFoundError,
+from django.db.migrations.exceptions import (
+    CircularDependencyError, NodeNotFoundError,
 )
-from django.test import TestCase
+from django.db.migrations.graph import RECURSION_DEPTH_WARNING, MigrationGraph
+from django.test import SimpleTestCase
 from django.utils.encoding import force_text
 
 
-class GraphTests(TestCase):
+class GraphTests(SimpleTestCase):
     """
     Tests the digraph structure.
     """
@@ -283,3 +283,4 @@ class GraphTests(TestCase):
         graph.add_dependency("app_a.0003", ("app_a", "0003"), ("app_b", "0002"))
 
         self.assertEqual(force_text(graph), "Graph: 5 nodes, 3 edges")
+        self.assertEqual(repr(graph), "<MigrationGraph: nodes=5, edges=3>")

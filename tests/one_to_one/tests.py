@@ -468,3 +468,32 @@ class OneToOneTests(TestCase):
         # refs #21563
         self.assertFalse(hasattr(Director(), 'director'))
         self.assertFalse(hasattr(School(), 'school'))
+
+    def test_update_one_to_one_pk(self):
+        p1 = Place.objects.create()
+        p2 = Place.objects.create()
+        r1 = Restaurant.objects.create(place=p1)
+        r2 = Restaurant.objects.create(place=p2)
+        w = Waiter.objects.create(restaurant=r1)
+
+        Waiter.objects.update(restaurant=r2)
+        w.refresh_from_db()
+        self.assertEqual(w.restaurant, r2)
+
+    def test_rel_pk_subquery(self):
+        r = Restaurant.objects.first()
+        q1 = Restaurant.objects.filter(place_id=r.pk)
+        # Test that subquery using primary key and a query against the
+        # same model works correctly.
+        q2 = Restaurant.objects.filter(place_id__in=q1)
+        self.assertQuerysetEqual(q2, [r], lambda x: x)
+        # Test that subquery using 'pk__in' instead of 'place_id__in' work, too.
+        q2 = Restaurant.objects.filter(
+            pk__in=Restaurant.objects.filter(place__id=r.place.pk)
+        )
+        self.assertQuerysetEqual(q2, [r], lambda x: x)
+
+    def test_rel_pk_exact(self):
+        r = Restaurant.objects.first()
+        r2 = Restaurant.objects.filter(pk__exact=r).first()
+        self.assertEqual(r, r2)

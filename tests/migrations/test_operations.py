@@ -614,6 +614,32 @@ class OperationTests(OperationTestBase):
         self.assertEqual(Rider.objects.count(), 2)
         self.assertEqual(Pony._meta.get_field('riders').remote_field.through.objects.count(), 2)
 
+    def test_rename_m2m_target_model(self):
+        app_label = "test_rename_m2m_target_model"
+        project_state = self.apply_operations(app_label, ProjectState(), operations=[
+            migrations.CreateModel("Rider", fields=[]),
+            migrations.CreateModel("Pony", fields=[
+                ("riders", models.ManyToManyField("Rider")),
+            ]),
+        ])
+        Pony = project_state.apps.get_model(app_label, "Pony")
+        Rider = project_state.apps.get_model(app_label, "Rider")
+        pony = Pony.objects.create()
+        rider = Rider.objects.create()
+        pony.riders.add(rider)
+
+        project_state = self.apply_operations(app_label, project_state, operations=[
+            migrations.RenameModel("Rider", "Rider2"),
+        ])
+        Pony = project_state.apps.get_model(app_label, "Pony")
+        Rider = project_state.apps.get_model(app_label, "Rider2")
+        pony = Pony.objects.create()
+        rider = Rider.objects.create()
+        pony.riders.add(rider)
+        self.assertEqual(Pony.objects.count(), 2)
+        self.assertEqual(Rider.objects.count(), 2)
+        self.assertEqual(Pony._meta.get_field('riders').remote_field.through.objects.count(), 2)
+
     def test_add_field(self):
         """
         Tests the AddField operation.
@@ -1101,9 +1127,18 @@ class OperationTests(OperationTestBase):
 
         def assertIdTypeEqualsFkType():
             with connection.cursor() as cursor:
-                id_type = [c.type_code for c in connection.introspection.get_table_description(cursor, "test_alflpkfk_pony") if c.name == "id"][0]
-                fk_type = [c.type_code for c in connection.introspection.get_table_description(cursor, "test_alflpkfk_rider") if c.name == "pony_id"][0]
+                id_type, id_null = [
+                    (c.type_code, c.null_ok)
+                    for c in connection.introspection.get_table_description(cursor, "test_alflpkfk_pony")
+                    if c.name == "id"
+                ][0]
+                fk_type, fk_null = [
+                    (c.type_code, c.null_ok)
+                    for c in connection.introspection.get_table_description(cursor, "test_alflpkfk_rider")
+                    if c.name == "pony_id"
+                ][0]
             self.assertEqual(id_type, fk_type)
+            self.assertEqual(id_null, fk_null)
 
         assertIdTypeEqualsFkType()
         # Test the database alteration

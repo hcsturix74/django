@@ -7,14 +7,11 @@ from unittest import skipUnless
 
 from django.conf import settings
 from django.contrib.gis.geoip import HAS_GEOIP
-from django.contrib.gis.geos import HAS_GEOS
+from django.contrib.gis.geos import HAS_GEOS, GEOSGeometry
 from django.utils import six
 
 if HAS_GEOIP:
     from django.contrib.gis.geoip import GeoIP, GeoIPException
-
-if HAS_GEOS:
-    from django.contrib.gis.geos import GEOSGeometry
 
 
 # Note: Requires use of both the GeoIP country and city datasets.
@@ -35,16 +32,16 @@ class GeoIPTest(unittest.TestCase):
         g3 = GeoIP.open(path, 0)  # MaxMind Python API syntax.
 
         for g in (g1, g2, g3):
-            self.assertEqual(True, bool(g._country))
-            self.assertEqual(True, bool(g._city))
+            self.assertTrue(g._country)
+            self.assertTrue(g._city)
 
         # Only passing in the location of one database.
         city = os.path.join(path, 'GeoLiteCity.dat')
         cntry = os.path.join(path, 'GeoIP.dat')
         g4 = GeoIP(city, country='')
-        self.assertEqual(None, g4._country)
+        self.assertIsNone(g4._country)
         g5 = GeoIP(cntry, city='')
-        self.assertEqual(None, g5._city)
+        self.assertIsNone(g5._city)
 
         # Improper parameters.
         bad_params = (23, 'foo', 15.23)
@@ -116,7 +113,8 @@ class GeoIPTest(unittest.TestCase):
     def test05_unicode_response(self):
         "Testing that GeoIP strings are properly encoded, see #16553."
         g = GeoIP()
-        d = g.city("www.osnabrueck.de")
-        self.assertEqual('Osnabrück', d['city'])
-        d = g.country('200.7.49.81')
-        self.assertEqual('Curaçao', d['country_name'])
+        d = g.city("duesseldorf.de")
+        self.assertEqual('Düsseldorf', d['city'])
+        d = g.country('200.26.205.1')
+        # Some databases have only unaccented countries
+        self.assertIn(d['country_name'], ('Curaçao', 'Curacao'))

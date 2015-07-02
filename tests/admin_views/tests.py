@@ -27,7 +27,8 @@ from django.forms.utils import ErrorList
 from django.template.loader import render_to_string
 from django.template.response import TemplateResponse
 from django.test import (
-    TestCase, modify_settings, override_settings, skipUnlessDBFeature,
+    SimpleTestCase, TestCase, modify_settings, override_settings,
+    skipUnlessDBFeature,
 )
 from django.test.utils import override_script_prefix, patch_logger
 from django.utils import formats, six, translation
@@ -1103,8 +1104,8 @@ class AdminJavaScriptTest(TestCase):
         """
         with override_settings(DEBUG=False):
             response = self.client.get(reverse('admin:admin_views_section_add'))
-            self.assertNotContains(response, 'jquery.js')
-            self.assertContains(response, 'jquery.min.js')
+            self.assertNotContains(response, 'vendor/jquery/jquery.js')
+            self.assertContains(response, 'vendor/jquery/jquery.min.js')
             self.assertNotContains(response, 'prepopulate.js')
             self.assertContains(response, 'prepopulate.min.js')
             self.assertNotContains(response, 'actions.js')
@@ -1115,8 +1116,8 @@ class AdminJavaScriptTest(TestCase):
             self.assertContains(response, 'inlines.min.js')
         with override_settings(DEBUG=True):
             response = self.client.get(reverse('admin:admin_views_section_add'))
-            self.assertContains(response, 'jquery.js')
-            self.assertNotContains(response, 'jquery.min.js')
+            self.assertContains(response, 'vendor/jquery/jquery.js')
+            self.assertNotContains(response, 'vendor/jquery/jquery.min.js')
             self.assertContains(response, 'prepopulate.js')
             self.assertNotContains(response, 'prepopulate.min.js')
             self.assertContains(response, 'actions.js')
@@ -1151,18 +1152,59 @@ class SaveAsTests(TestCase):
         self.assertEqual(len(Person.objects.filter(name='John M')), 1)
         self.assertEqual(len(Person.objects.filter(id=self.per1.pk)), 1)
 
-    def test_save_as_display(self):
+    def test_save_as_new_with_validation_errors(self):
         """
-        Ensure that 'save as' is displayed when activated and after submitting
-        invalid data aside save_as_new will not show us a form to overwrite the
-        initial model.
+        Ensure that when you click "Save as new" and have a validation error,
+        you only see the "Save as new" button and not the other save buttons,
+        and that only the "Save as" button is visible.
         """
-        change_url = reverse('admin:admin_views_person_change', args=(self.per1.pk,))
-        response = self.client.get(change_url)
-        self.assertTrue(response.context['save_as'])
-        post_data = {'_saveasnew': '', 'name': 'John M', 'gender': 3, 'alive': 'checked'}
-        response = self.client.post(change_url, post_data)
-        self.assertEqual(response.context['form_url'], reverse('admin:admin_views_person_add'))
+        response = self.client.post(reverse('admin:admin_views_person_change', args=(self.per1.pk,)), {
+            '_saveasnew': '',
+            'gender': 'invalid',
+            '_addanother': 'fail',
+        })
+        self.assertContains(response, 'Please correct the errors below.')
+        self.assertFalse(response.context['show_save_and_add_another'])
+        self.assertFalse(response.context['show_save_and_continue'])
+        self.assertTrue(response.context['show_save_as_new'])
+
+    def test_save_as_new_with_validation_errors_with_inlines(self):
+        parent = Parent.objects.create(name='Father')
+        child = Child.objects.create(parent=parent, name='Child')
+        response = self.client.post(reverse('admin:admin_views_parent_change', args=(parent.pk,)), {
+            '_saveasnew': 'Save as new',
+            'child_set-0-parent': parent.pk,
+            'child_set-0-id': child.pk,
+            'child_set-0-name': 'Child',
+            'child_set-INITIAL_FORMS': 1,
+            'child_set-MAX_NUM_FORMS': 1000,
+            'child_set-MIN_NUM_FORMS': 0,
+            'child_set-TOTAL_FORMS': 4,
+            'name': '_invalid',
+        })
+        self.assertContains(response, 'Please correct the error below.')
+        self.assertFalse(response.context['show_save_and_add_another'])
+        self.assertFalse(response.context['show_save_and_continue'])
+        self.assertTrue(response.context['show_save_as_new'])
+
+    def test_save_as_new_with_inlines_with_validation_errors(self):
+        parent = Parent.objects.create(name='Father')
+        child = Child.objects.create(parent=parent, name='Child')
+        response = self.client.post(reverse('admin:admin_views_parent_change', args=(parent.pk,)), {
+            '_saveasnew': 'Save as new',
+            'child_set-0-parent': parent.pk,
+            'child_set-0-id': child.pk,
+            'child_set-0-name': '_invalid',
+            'child_set-INITIAL_FORMS': 1,
+            'child_set-MAX_NUM_FORMS': 1000,
+            'child_set-MIN_NUM_FORMS': 0,
+            'child_set-TOTAL_FORMS': 4,
+            'name': 'Father',
+        })
+        self.assertContains(response, 'Please correct the error below.')
+        self.assertFalse(response.context['show_save_and_add_another'])
+        self.assertFalse(response.context['show_save_and_continue'])
+        self.assertTrue(response.context['show_save_as_new'])
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls")
@@ -2392,7 +2434,7 @@ class AdminViewStringPrimaryKeyTest(TestCase):
         expected_link = reverse('admin:%s_modelwithstringprimarykey_history' %
             ModelWithStringPrimaryKey._meta.app_label,
             args=(quote(self.pk),))
-        self.assertContains(response, '<a href="%s" class="historylink"' % expected_link)
+        self.assertContains(response, '<a href="%s" class="historylink"' % escape(expected_link))
 
     def test_redirect_on_add_view_continue_button(self):
         """As soon as an object is added using "Save and continue editing"
@@ -6109,7 +6151,7 @@ class InlineAdminViewOnSiteTest(TestCase):
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls")
-class TestEtagWithAdminView(TestCase):
+class TestEtagWithAdminView(SimpleTestCase):
     # See https://code.djangoproject.com/ticket/16003
 
     def test_admin(self):

@@ -2,11 +2,13 @@ from __future__ import unicode_literals
 
 import warnings
 from collections import deque
+from functools import total_ordering
 
 from django.db.migrations.state import ProjectState
 from django.utils.datastructures import OrderedSet
 from django.utils.encoding import python_2_unicode_compatible
-from django.utils.functional import total_ordering
+
+from .exceptions import CircularDependencyError, NodeNotFoundError
 
 RECURSION_DEPTH_WARNING = (
     "Maximum recursion depth exceeded while generating migration graph, "
@@ -245,10 +247,14 @@ class MigrationGraph(object):
                     node = stack.pop()
 
     def __str__(self):
-        return "Graph: %s nodes, %s edges" % (
-            len(self.nodes),
-            sum(len(node.parents) for node in self.node_map.values()),
-        )
+        return 'Graph: %s nodes, %s edges' % self._nodes_and_edges()
+
+    def __repr__(self):
+        nodes, edges = self._nodes_and_edges()
+        return '<%s: nodes=%s, edges=%s>' % (self.__class__.__name__, nodes, edges)
+
+    def _nodes_and_edges(self):
+        return len(self.nodes), sum(len(node.parents) for node in self.node_map.values())
 
     def make_state(self, nodes=None, at_end=True, real_apps=None):
         """
@@ -276,27 +282,3 @@ class MigrationGraph(object):
 
     def __contains__(self, node):
         return node in self.nodes
-
-
-class CircularDependencyError(Exception):
-    """
-    Raised when there's an impossible-to-resolve circular dependency.
-    """
-    pass
-
-
-@python_2_unicode_compatible
-class NodeNotFoundError(LookupError):
-    """
-    Raised when an attempt on a node is made that is not available in the graph.
-    """
-
-    def __init__(self, message, node):
-        self.message = message
-        self.node = node
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return "NodeNotFoundError(%r)" % self.node

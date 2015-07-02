@@ -19,7 +19,7 @@ from django.db.models.deletion import Collector
 from django.db.models.expressions import F, Date, DateTime
 from django.db.models.fields import AutoField
 from django.db.models.query_utils import (
-    Q, InvalidQuery, deferred_class_factory,
+    Q, InvalidQuery, check_rel_lookup_compatibility, deferred_class_factory,
 )
 from django.db.models.sql.constants import CURSOR
 from django.utils import six, timezone
@@ -590,10 +590,12 @@ class QuerySet(object):
 
         collector = Collector(using=del_query.db)
         collector.collect(del_query)
-        collector.delete()
+        deleted, _rows_count = collector.delete()
 
         # Clear the result cache, in case this QuerySet gets reused.
         self._result_cache = None
+        return deleted, _rows_count
+
     delete.alters_data = True
     delete.queryset_only = True
 
@@ -602,7 +604,7 @@ class QuerySet(object):
         Deletes objects found from the given queryset in single direct SQL
         query. No signals are sent, and there is no protection for cascades.
         """
-        sql.DeleteQuery(self.model).delete_qs(self, using)
+        return sql.DeleteQuery(self.model).delete_qs(self, using)
     _raw_delete.alters_data = True
 
     def update(self, **kwargs):
@@ -1139,16 +1141,19 @@ class QuerySet(object):
         """
         return self.query.has_filters()
 
-    def is_compatible_query_object_type(self, opts):
-        model = self.model
-        return (
-            # We trust that users of values() know what they are doing.
-            self._fields is not None or
-            # Otherwise check that models are compatible.
-            model == opts.concrete_model or
-            opts.concrete_model in model._meta.get_parent_list() or
-            model in opts.get_parent_list()
-        )
+    def is_compatible_query_object_type(self, opts, field):
+        """
+        Check that using this queryset as the rhs value for a lookup is
+        allowed. The opts are the options of the relation's target we are
+        querying against. For example in .filter(author__in=Author.objects.all())
+        the opts would be Author's (from the author field) and self.model would
+        be Author.objects.all() queryset's .model (Author also). The field is
+        the related field on the lhs side.
+        """
+        # We trust that users of values() know what they are doing.
+        if self._fields is not None:
+            return True
+        return check_rel_lookup_compatibility(self.model, opts, field)
     is_compatible_query_object_type.queryset_only = True
 
 
@@ -1216,7 +1221,7 @@ class RawQuerySet(object):
                 model_cls = deferred_class_factory(self.model, skip)
             else:
                 model_cls = self.model
-            fields = [self.model_fields.get(c, None) for c in self.columns]
+            fields = [self.model_fields.get(c) for c in self.columns]
             converters = compiler.get_converters([
                 f.get_col(f.model._meta.db_table) if f else None for f in fields
             ])
@@ -1536,7 +1541,12 @@ def prefetch_one_level(instances, prefetcher, lookup, level):
     # contains some prefetch_related lookups. We don't want to trigger the
     # prefetch_related functionality by evaluating the query. Rather, we need
     # to merge in the prefetch_related lookups.
-    additional_lookups = getattr(rel_qs, '_prefetch_related_lookups', [])
+    # Copy the lookups in case it is a Prefetch object which could be reused
+    # later (happens in nested prefetch_related).
+    additional_lookups = [
+        copy.copy(additional_lookup) for additional_lookup
+        in getattr(rel_qs, '_prefetch_related_lookups', [])
+    ]
     if additional_lookups:
         # Don't need to clone because the manager should have given us a fresh
         # instance, so we access an internal instead of using public interface

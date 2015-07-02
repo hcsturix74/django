@@ -200,7 +200,7 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
         ordering.  Otherwise don't specify the queryset, let the field decide
         (returns None in that case).
         """
-        related_admin = self.admin_site._registry.get(db_field.remote_field.model, None)
+        related_admin = self.admin_site._registry.get(db_field.remote_field.model)
         if related_admin is not None:
             ordering = related_admin.get_ordering(request)
             if ordering is not None and ordering != ():
@@ -272,6 +272,15 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
                 'content_type_id': get_content_type_for_model(obj).pk,
                 'object_id': obj.pk
             })
+
+    def get_empty_value_display(self):
+        """
+        Return the empty_value_display set on ModelAdmin or AdminSite.
+        """
+        try:
+            return mark_safe(self.empty_value_display)
+        except AttributeError:
+            return mark_safe(self.admin_site.empty_value_display)
 
     def get_fields(self, request, obj=None):
         """
@@ -557,7 +566,7 @@ class ModelAdmin(BaseModelAdmin):
         js = [
             'core.js',
             'admin/RelatedObjectLookups.js',
-            'jquery%s.js' % extra,
+            'vendor/jquery/jquery%s.js' % extra,
             'jquery.init.js',
             'actions%s.js' % extra,
             'urlify.js',
@@ -1342,9 +1351,8 @@ class ModelAdmin(BaseModelAdmin):
                     'name': force_text(opts.verbose_name), 'key': escape(object_id)})
 
             if request.method == 'POST' and "_saveasnew" in request.POST:
-                return self.add_view(request, form_url=reverse('admin:%s_%s_add' % (
-                    opts.app_label, opts.model_name),
-                    current_app=self.admin_site.name))
+                object_id = None
+                obj = None
 
         ModelForm = self.get_form(request, obj)
         if request.method == 'POST':
@@ -1366,6 +1374,8 @@ class ModelAdmin(BaseModelAdmin):
                 else:
                     self.log_change(request, new_object, change_message)
                     return self.response_change(request, new_object)
+            else:
+                form_validated = False
         else:
             if add:
                 initial = self.get_changeform_initial_data(request)
@@ -1400,6 +1410,12 @@ class ModelAdmin(BaseModelAdmin):
             errors=helpers.AdminErrorList(form, formsets),
             preserved_filters=self.get_preserved_filters(request),
         )
+
+        # Hide the "Save" and "Save and continue" buttons if "Save as New" was
+        # previously chosen to prevent the interface from getting confusing.
+        if request.method == 'POST' and not form_validated and "_saveasnew" in request.POST:
+            context['show_save'] = False
+            context['show_save_and_continue'] = False
 
         context.update(extra_context or {})
 
@@ -1743,7 +1759,8 @@ class InlineModelAdmin(BaseModelAdmin):
     @property
     def media(self):
         extra = '' if settings.DEBUG else '.min'
-        js = ['jquery%s.js' % extra, 'jquery.init.js', 'inlines%s.js' % extra]
+        js = ['vendor/jquery/jquery%s.js' % extra, 'jquery.init.js',
+              'inlines%s.js' % extra]
         if self.filter_vertical or self.filter_horizontal:
             js.extend(['SelectBox.js', 'SelectFilter2.js'])
         return forms.Media(js=[static('admin/js/%s' % url) for url in js])

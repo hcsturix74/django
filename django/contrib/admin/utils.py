@@ -10,6 +10,7 @@ from django.core.urlresolvers import NoReverseMatch, reverse
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
+from django.db.models.sql.constants import QUERY_TERMS
 from django.forms.forms import pretty_name
 from django.utils import formats, six, timezone
 from django.utils.encoding import force_str, force_text, smart_text
@@ -22,10 +23,20 @@ def lookup_needs_distinct(opts, lookup_path):
     """
     Returns True if 'distinct()' should be used to query the given lookup path.
     """
-    field_name = lookup_path.split('__', 1)[0]
-    field = opts.get_field(field_name)
-    if hasattr(field, 'get_path_info') and any(path.m2m for path in field.get_path_info()):
-        return True
+    lookup_fields = lookup_path.split('__')
+    # Remove the last item of the lookup path if it is a query term
+    if lookup_fields[-1] in QUERY_TERMS:
+        lookup_fields = lookup_fields[:-1]
+    # Now go through the fields (following all relations) and look for an m2m
+    for field_name in lookup_fields:
+        field = opts.get_field(field_name)
+        if hasattr(field, 'get_path_info'):
+            # This field is a relation, update opts to follow the relation
+            path_info = field.get_path_info()
+            opts = path_info[-1].to_opts
+            if any(path.m2m for path in path_info):
+                # This field is a m2m relation so we know we need to call distinct
+                return True
     return False
 
 
@@ -57,7 +68,7 @@ def quote(s):
     res = list(s)
     for i in range(len(res)):
         c = res[i]
-        if c in """:/_#?;@&=+$,"[]<>%\\""":
+        if c in """:/_#?;@&=+$,"[]<>%\n\\""":
             res[i] = '_%02X' % ord(c)
     return ''.join(res)
 
@@ -367,25 +378,24 @@ def help_text_for_field(name, model):
     return smart_text(help_text)
 
 
-def display_for_field(value, field):
+def display_for_field(value, field, empty_value_display):
     from django.contrib.admin.templatetags.admin_list import _boolean_icon
-    from django.contrib.admin.views.main import EMPTY_CHANGELIST_VALUE
 
     if field.flatchoices:
-        return dict(field.flatchoices).get(value, EMPTY_CHANGELIST_VALUE)
+        return dict(field.flatchoices).get(value, empty_value_display)
     # NullBooleanField needs special-case null-handling, so it comes
     # before the general null test.
     elif isinstance(field, models.BooleanField) or isinstance(field, models.NullBooleanField):
         return _boolean_icon(value)
     elif value is None:
-        return EMPTY_CHANGELIST_VALUE
+        return empty_value_display
     elif isinstance(field, models.DateTimeField):
         return formats.localize(timezone.template_localtime(value))
     elif isinstance(field, (models.DateField, models.TimeField)):
         return formats.localize(value)
     elif isinstance(field, models.DecimalField):
         return formats.number_format(value, field.decimal_places)
-    elif isinstance(field, models.FloatField):
+    elif isinstance(field, (models.IntegerField, models.FloatField)):
         return formats.number_format(value)
     elif isinstance(field, models.FileField) and value:
         return format_html('<a href="{}">{}</a>', value.url, value)
@@ -393,14 +403,13 @@ def display_for_field(value, field):
         return smart_text(value)
 
 
-def display_for_value(value, boolean=False):
+def display_for_value(value, empty_value_display, boolean=False):
     from django.contrib.admin.templatetags.admin_list import _boolean_icon
-    from django.contrib.admin.views.main import EMPTY_CHANGELIST_VALUE
 
     if boolean:
         return _boolean_icon(value)
     elif value is None:
-        return EMPTY_CHANGELIST_VALUE
+        return empty_value_display
     elif isinstance(value, datetime.datetime):
         return formats.localize(timezone.template_localtime(value))
     elif isinstance(value, (datetime.date, datetime.time)):

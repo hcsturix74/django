@@ -8,12 +8,13 @@ from itertools import chain
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
+from django.db import connections
 from django.db.models.fields import AutoField
 from django.db.models.fields.proxy import OrderWrt
 from django.db.models.fields.related import ManyToManyField
 from django.utils import six
 from django.utils.datastructures import ImmutableList, OrderedSet
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.deprecation import RemovedInDjango110Warning
 from django.utils.encoding import (
     force_text, python_2_unicode_compatible, smart_text,
 )
@@ -36,7 +37,8 @@ DEFAULT_NAMES = ('verbose_name', 'verbose_name_plural', 'db_table', 'ordering',
                  'order_with_respect_to', 'app_label', 'db_tablespace',
                  'abstract', 'managed', 'proxy', 'swappable', 'auto_created',
                  'index_together', 'apps', 'default_permissions',
-                 'select_on_save', 'default_related_name')
+                 'select_on_save', 'default_related_name',
+                 'required_db_features', 'required_db_vendor')
 
 
 class raise_deprecation(object):
@@ -51,7 +53,7 @@ class raise_deprecation(object):
                     fn.__name__,
                     self.suggested_alternative,
                 ),
-                RemovedInDjango20Warning, stacklevel=2
+                RemovedInDjango110Warning, stacklevel=2
             )
             return fn(*args, **kwargs)
         return wrapper
@@ -111,6 +113,8 @@ class Options(object):
         self.get_latest_by = None
         self.order_with_respect_to = None
         self.db_tablespace = settings.DEFAULT_TABLESPACE
+        self.required_db_features = []
+        self.required_db_vendor = None
         self.meta = meta
         self.pk = None
         self.has_auto_field = False
@@ -171,6 +175,14 @@ class Options(object):
             model = None
         m2m = link.is_relation and link.many_to_many
         return link, model, direct, m2m
+
+    @property
+    def label(self):
+        return '%s.%s' % (self.app_label, self.object_name)
+
+    @property
+    def label_lower(self):
+        return '%s.%s' % (self.app_label, self.model_name)
 
     @property
     def app_config(self):
@@ -337,6 +349,22 @@ class Options(object):
     def __str__(self):
         return "%s.%s" % (smart_text(self.app_label), smart_text(self.model_name))
 
+    def can_migrate(self, connection):
+        """
+        Return True if the model can/should be migrated on the `connection`.
+        `connection` can be either a real connection or a connection alias.
+        """
+        if self.proxy or self.swapped or not self.managed:
+            return False
+        if isinstance(connection, six.string_types):
+            connection = connections[connection]
+        if self.required_db_vendor:
+            return self.required_db_vendor == connection.vendor
+        if self.required_db_features:
+            return all(getattr(connection.features, feat, False)
+                       for feat in self.required_db_features)
+        return True
+
     @property
     def verbose_name_raw(self):
         """
@@ -357,7 +385,6 @@ class Options(object):
         case insensitive, so we make sure we are case insensitive here.
         """
         if self.swappable:
-            model_label = '%s.%s' % (self.app_label, self.model_name)
             swapped_for = getattr(settings, self.swappable, None)
             if swapped_for:
                 try:
@@ -369,7 +396,7 @@ class Options(object):
                     # or as part of validation.
                     return swapped_for
 
-                if '%s.%s' % (swapped_label, swapped_object.lower()) not in (None, model_label):
+                if '%s.%s' % (swapped_label, swapped_object.lower()) not in (None, self.label_lower):
                     return swapped_for
         return None
 
@@ -510,7 +537,7 @@ class Options(object):
         only forward fields will be returned.
 
         The many_to_many argument exists for backwards compatibility reasons;
-        it has been deprecated and will be removed in Django 2.0.
+        it has been deprecated and will be removed in Django 1.10.
         """
         m2m_in_kwargs = many_to_many is not None
         if m2m_in_kwargs:
@@ -519,7 +546,7 @@ class Options(object):
             warnings.warn(
                 "The 'many_to_many' argument on get_field() is deprecated; "
                 "use a filter on field.many_to_many instead.",
-                RemovedInDjango20Warning
+                RemovedInDjango110Warning
             )
 
         try:
@@ -728,9 +755,9 @@ class Options(object):
 
     def get_fields(self, include_parents=True, include_hidden=False):
         """
-        Returns a list of fields associated to the model. By default will only
-        return forward fields. This can be changed by enabling or disabling
-        field types using the parameters:
+        Returns a list of fields associated to the model. By default, includes
+        forward and reverse fields, fields derived from inheritance, but not
+        hidden fields. The returned fields can be changed using the parameters:
 
         - include_parents: include fields derived from inheritance
         - include_hidden:  include fields that have a related_name that

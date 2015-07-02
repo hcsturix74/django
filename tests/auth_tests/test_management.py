@@ -17,7 +17,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks, exceptions
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings, override_system_checks
+from django.test import (
+    SimpleTestCase, TestCase, override_settings, override_system_checks,
+)
 from django.utils import six
 from django.utils.encoding import force_str
 from django.utils.translation import ugettext_lazy as _
@@ -303,6 +305,33 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
 
         self.assertEqual(CustomUser._default_manager.count(), 0)
 
+    @override_settings(
+        AUTH_USER_MODEL='auth.CustomUserNonUniqueUsername',
+        AUTHENTICATION_BACKENDS=['my.custom.backend'],
+    )
+    def test_swappable_user_username_non_unique(self):
+        @mock_inputs({
+            'username': 'joe',
+            'password': 'nopasswd',
+        })
+        def createsuperuser():
+            new_io = six.StringIO()
+            call_command(
+                "createsuperuser",
+                interactive=True,
+                email="joe@somewhere.org",
+                stdout=new_io,
+                stdin=MockTTY(),
+            )
+            command_output = new_io.getvalue().strip()
+            self.assertEqual(command_output, 'Superuser created successfully.')
+
+        for i in range(2):
+            createsuperuser()
+
+        users = CustomUserNonUniqueUsername.objects.filter(username="joe")
+        self.assertEqual(users.count(), 2)
+
     def test_skip_if_not_in_TTY(self):
         """
         If the command is not called from a TTY, it should be skipped and a
@@ -415,7 +444,7 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
         test(self)
 
 
-class CustomUserModelValidationTestCase(TestCase):
+class CustomUserModelValidationTestCase(SimpleTestCase):
     @override_settings(AUTH_USER_MODEL='auth.CustomUserNonListRequiredFields')
     @override_system_checks([check_user_model])
     def test_required_fields_is_list(self):

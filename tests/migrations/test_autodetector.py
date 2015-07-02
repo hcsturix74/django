@@ -17,8 +17,16 @@ class DeconstructableObject(object):
     A custom deconstructable object.
     """
 
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
     def deconstruct(self):
-        return self.__module__ + '.' + self.__class__.__name__, [], {}
+        return (
+            self.__module__ + '.' + self.__class__.__name__,
+            self.args,
+            self.kwargs
+        )
 
 
 class AutodetectorTests(TestCase):
@@ -62,6 +70,104 @@ class AutodetectorTests(TestCase):
     author_name_deconstructable_4 = ModelState("testapp", "Author", [
         ("id", models.AutoField(primary_key=True)),
         ("name", models.CharField(max_length=200, default=models.IntegerField())),
+    ])
+    author_name_deconstructable_list_1 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=[DeconstructableObject(), 123])),
+    ])
+    author_name_deconstructable_list_2 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=[DeconstructableObject(), 123])),
+    ])
+    author_name_deconstructable_list_3 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=[DeconstructableObject(), 999])),
+    ])
+    author_name_deconstructable_tuple_1 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=(DeconstructableObject(), 123))),
+    ])
+    author_name_deconstructable_tuple_2 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=(DeconstructableObject(), 123))),
+    ])
+    author_name_deconstructable_tuple_3 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=(DeconstructableObject(), 999))),
+    ])
+    author_name_deconstructable_dict_1 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default={
+            'item': DeconstructableObject(), 'otheritem': 123
+        })),
+    ])
+    author_name_deconstructable_dict_2 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default={
+            'item': DeconstructableObject(), 'otheritem': 123
+        })),
+    ])
+    author_name_deconstructable_dict_3 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default={
+            'item': DeconstructableObject(), 'otheritem': 999
+        })),
+    ])
+    author_name_nested_deconstructable_1 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2'),),
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c')),
+        ))),
+    ])
+    author_name_nested_deconstructable_2 = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2'),),
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c')),
+        ))),
+    ])
+    author_name_nested_deconstructable_changed_arg = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2-changed'),),
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c')),
+        ))),
+    ])
+    author_name_nested_deconstructable_extra_arg = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2'),),
+            None,
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c')),
+        ))),
+    ])
+    author_name_nested_deconstructable_changed_kwarg = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2'),),
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c-changed')),
+        ))),
+    ])
+    author_name_nested_deconstructable_extra_kwarg = ModelState("testapp", "Author", [
+        ("id", models.AutoField(primary_key=True)),
+        ("name", models.CharField(max_length=200, default=DeconstructableObject(
+            DeconstructableObject(1),
+            (DeconstructableObject('t1'), DeconstructableObject('t2'),),
+            a=DeconstructableObject('A'),
+            b=DeconstructableObject(B=DeconstructableObject('c')),
+            c=None,
+        ))),
     ])
     author_custom_pk = ModelState("testapp", "Author", [("pk_field", models.IntegerField(primary_key=True))])
     author_with_biography_non_blank = ModelState("testapp", "Author", [
@@ -447,7 +553,7 @@ class AutodetectorTests(TestCase):
         # Use project state to make a new migration change set
         before = self.make_project_state([])
         after = self.make_project_state([self.author_empty, self.other_pony, self.other_stable, self.third_thing])
-        autodetector = MigrationAutodetector(before, after, MigrationQuestioner(defaults={"ask_initial": True}))
+        autodetector = MigrationAutodetector(before, after, MigrationQuestioner({"ask_initial": True}))
         changes = autodetector._detect_changes()
         # Run through arrange_for_graph
         graph = MigrationGraph()
@@ -546,18 +652,16 @@ class AutodetectorTests(TestCase):
         self.assertOperationTypes(changes, 'testapp', 0, ["AlterField"])
         self.assertOperationAttributes(changes, "testapp", 0, 0, name="name", preserve_default=True)
 
-    def test_alter_field_to_not_null_with_default(self):
+    @mock.patch('django.db.migrations.questioner.MigrationQuestioner.ask_not_null_alteration',
+                side_effect=AssertionError("Should not have prompted for not null addition"))
+    def test_alter_field_to_not_null_with_default(self, mocked_ask_method):
         """
         #23609 - Tests autodetection of nullable to non-nullable alterations.
         """
-        class CustomQuestioner(MigrationQuestioner):
-            def ask_not_null_alteration(self, field_name, model_name):
-                raise Exception("Should not have prompted for not null addition")
-
         # Make state
         before = self.make_project_state([self.author_name_null])
         after = self.make_project_state([self.author_name_default])
-        autodetector = MigrationAutodetector(before, after, CustomQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
@@ -565,42 +669,36 @@ class AutodetectorTests(TestCase):
         self.assertOperationAttributes(changes, "testapp", 0, 0, name="name", preserve_default=True)
         self.assertOperationFieldAttributes(changes, "testapp", 0, 0, default='Ada Lovelace')
 
-    def test_alter_field_to_not_null_without_default(self):
+    @mock.patch('django.db.migrations.questioner.MigrationQuestioner.ask_not_null_alteration',
+                return_value=models.NOT_PROVIDED)
+    def test_alter_field_to_not_null_without_default(self, mocked_ask_method):
         """
         #23609 - Tests autodetection of nullable to non-nullable alterations.
         """
-        class CustomQuestioner(MigrationQuestioner):
-            def ask_not_null_alteration(self, field_name, model_name):
-                # Ignore for now, and let me handle existing rows with NULL
-                # myself (e.g. adding a RunPython or RunSQL operation in the new
-                # migration file before the AlterField operation)
-                return models.NOT_PROVIDED
-
         # Make state
         before = self.make_project_state([self.author_name_null])
         after = self.make_project_state([self.author_name])
-        autodetector = MigrationAutodetector(before, after, CustomQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
+        self.assertEqual(mocked_ask_method.call_count, 1)
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
         self.assertOperationTypes(changes, 'testapp', 0, ["AlterField"])
         self.assertOperationAttributes(changes, "testapp", 0, 0, name="name", preserve_default=True)
         self.assertOperationFieldAttributes(changes, "testapp", 0, 0, default=models.NOT_PROVIDED)
 
-    def test_alter_field_to_not_null_oneoff_default(self):
+    @mock.patch('django.db.migrations.questioner.MigrationQuestioner.ask_not_null_alteration',
+                return_value='Some Name')
+    def test_alter_field_to_not_null_oneoff_default(self, mocked_ask_method):
         """
         #23609 - Tests autodetection of nullable to non-nullable alterations.
         """
-        class CustomQuestioner(MigrationQuestioner):
-            def ask_not_null_alteration(self, field_name, model_name):
-                # Provide a one-off default now (will be set on all existing rows)
-                return 'Some Name'
-
         # Make state
         before = self.make_project_state([self.author_name_null])
         after = self.make_project_state([self.author_name])
-        autodetector = MigrationAutodetector(before, after, CustomQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
+        self.assertEqual(mocked_ask_method.call_count, 1)
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
         self.assertOperationTypes(changes, 'testapp', 0, ["AlterField"])
@@ -873,9 +971,7 @@ class AutodetectorTests(TestCase):
         # Make state
         before = self.make_project_state([self.author_with_db_table_options])
         after = self.make_project_state([self.author_renamed_with_db_table_options])
-        autodetector = MigrationAutodetector(
-            before, after, MigrationQuestioner({"ask_rename_model": True})
-        )
+        autodetector = MigrationAutodetector(before, after, MigrationQuestioner({"ask_rename_model": True}))
         changes = autodetector._detect_changes()
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
@@ -890,9 +986,7 @@ class AutodetectorTests(TestCase):
         # Make state
         before = self.make_project_state([self.author_with_db_table_options])
         after = self.make_project_state([self.author_renamed_with_new_db_table_options])
-        autodetector = MigrationAutodetector(
-            before, after, MigrationQuestioner({"ask_rename_model": True})
-        )
+        autodetector = MigrationAutodetector(before, after, MigrationQuestioner({"ask_rename_model": True}))
         changes = autodetector._detect_changes()
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
@@ -1043,9 +1137,10 @@ class AutodetectorTests(TestCase):
         changes = autodetector._detect_changes()
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, "otherapp", 1)
-        self.assertOperationTypes(changes, "otherapp", 0, ["AlterUniqueTogether", "AlterIndexTogether", "RemoveField"])
-        self.assertOperationAttributes(changes, "otherapp", 0, 0, name="book", unique_together={("author", "title")})
-        self.assertOperationAttributes(changes, "otherapp", 0, 1, name="book", index_together={("author", "title")})
+        self.assertOperationTypes(changes, "otherapp", 0, ["RemoveField", "AlterUniqueTogether", "AlterIndexTogether"])
+        self.assertOperationAttributes(changes, "otherapp", 0, 0, model_name="book", name="newfield")
+        self.assertOperationAttributes(changes, "otherapp", 0, 1, name="book", unique_together={("author", "title")})
+        self.assertOperationAttributes(changes, "otherapp", 0, 2, name="book", index_together={("author", "title")})
 
     def test_rename_field_and_foo_together(self):
         """
@@ -1225,6 +1320,107 @@ class AutodetectorTests(TestCase):
         changes = autodetector._detect_changes()
         self.assertEqual(changes, {})
 
+    def test_deconstructable_list(self):
+        """Nested deconstruction descends into lists."""
+        # When lists contain items that deconstruct to identical values, those lists
+        # should be considered equal for the purpose of detecting state changes
+        # (even if the original items are unequal).
+        before = self.make_project_state([self.author_name_deconstructable_list_1])
+        after = self.make_project_state([self.author_name_deconstructable_list_2])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(changes, {})
+
+        # Legitimate differences within the deconstructed lists should be reported
+        # as a change
+        before = self.make_project_state([self.author_name_deconstructable_list_1])
+        after = self.make_project_state([self.author_name_deconstructable_list_3])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+    def test_deconstructable_tuple(self):
+        """Nested deconstruction descends into tuples."""
+        # When tuples contain items that deconstruct to identical values, those tuples
+        # should be considered equal for the purpose of detecting state changes
+        # (even if the original items are unequal).
+        before = self.make_project_state([self.author_name_deconstructable_tuple_1])
+        after = self.make_project_state([self.author_name_deconstructable_tuple_2])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(changes, {})
+
+        # Legitimate differences within the deconstructed tuples should be reported
+        # as a change
+        before = self.make_project_state([self.author_name_deconstructable_tuple_1])
+        after = self.make_project_state([self.author_name_deconstructable_tuple_3])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+    def test_deconstructable_dict(self):
+        """Nested deconstruction descends into dict values."""
+        # When dicts contain items whose values deconstruct to identical values,
+        # those dicts should be considered equal for the purpose of detecting
+        # state changes (even if the original values are unequal).
+        before = self.make_project_state([self.author_name_deconstructable_dict_1])
+        after = self.make_project_state([self.author_name_deconstructable_dict_2])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(changes, {})
+
+        # Legitimate differences within the deconstructed dicts should be reported
+        # as a change
+        before = self.make_project_state([self.author_name_deconstructable_dict_1])
+        after = self.make_project_state([self.author_name_deconstructable_dict_3])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+    def test_nested_deconstructable_objects(self):
+        """
+        Nested deconstruction is applied recursively to the args/kwargs of
+        deconstructed objects.
+        """
+        # If the items within a deconstructed object's args/kwargs have the same
+        # deconstructed values - whether or not the items themselves are different
+        # instances - then the object as a whole is regarded as unchanged.
+        before = self.make_project_state([self.author_name_nested_deconstructable_1])
+        after = self.make_project_state([self.author_name_nested_deconstructable_2])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(changes, {})
+
+        # Differences that exist solely within the args list of a deconstructed object
+        # should be reported as changes
+        before = self.make_project_state([self.author_name_nested_deconstructable_1])
+        after = self.make_project_state([self.author_name_nested_deconstructable_changed_arg])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+        # Additional args should also be reported as a change
+        before = self.make_project_state([self.author_name_nested_deconstructable_1])
+        after = self.make_project_state([self.author_name_nested_deconstructable_extra_arg])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+        # Differences that exist solely within the kwargs dict of a deconstructed object
+        # should be reported as changes
+        before = self.make_project_state([self.author_name_nested_deconstructable_1])
+        after = self.make_project_state([self.author_name_nested_deconstructable_changed_kwarg])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
+        # Additional kwargs should also be reported as a change
+        before = self.make_project_state([self.author_name_nested_deconstructable_1])
+        after = self.make_project_state([self.author_name_nested_deconstructable_extra_kwarg])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        self.assertEqual(len(changes), 1)
+
     def test_deconstruct_type(self):
         """
         #22951 -- Uninstanted classes with deconstruct are correctly returned
@@ -1283,15 +1479,13 @@ class AutodetectorTests(TestCase):
         self.assertOperationAttributes(changes, 'testapp', 0, 0, name="publisher")
         self.assertOperationAttributes(changes, 'testapp', 0, 1, name="Publisher")
 
-    def test_add_many_to_many(self):
+    @mock.patch('django.db.migrations.questioner.MigrationQuestioner.ask_not_null_addition',
+                side_effect=AssertionError("Should not have prompted for not null addition"))
+    def test_add_many_to_many(self, mocked_ask_method):
         """#22435 - Adding a ManyToManyField should not prompt for a default."""
-        class CustomQuestioner(MigrationQuestioner):
-            def ask_not_null_addition(self, field_name, model_name):
-                raise Exception("Should not have prompted for not null addition")
-
         before = self.make_project_state([self.author_empty, self.publisher])
         after = self.make_project_state([self.author_with_m2m, self.publisher])
-        autodetector = MigrationAutodetector(before, after, CustomQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
         # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
@@ -1836,19 +2030,18 @@ class AutodetectorTests(TestCase):
         self.assertOperationTypes(changes, 'a', 0, ["CreateModel"])
         self.assertMigrationDependencies(changes, 'a', 0, [])
 
-    def test_add_blank_textfield_and_charfield(self):
+    @mock.patch('django.db.migrations.questioner.MigrationQuestioner.ask_not_null_addition',
+                side_effect=AssertionError("Should not have prompted for not null addition"))
+    def test_add_blank_textfield_and_charfield(self, mocked_ask_method):
         """
         #23405 - Adding a NOT NULL and blank `CharField` or `TextField`
         without default should not prompt for a default.
         """
-        class CustomQuestioner(MigrationQuestioner):
-            def ask_not_null_addition(self, field_name, model_name):
-                raise Exception("Should not have prompted for not null addition")
-
         before = self.make_project_state([self.author_empty])
         after = self.make_project_state([self.author_with_biography_blank])
-        autodetector = MigrationAutodetector(before, after, CustomQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
+        # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
         self.assertOperationTypes(changes, 'testapp', 0, ["AddField", "AddField"])
         self.assertOperationAttributes(changes, 'testapp', 0, 0)
@@ -1861,11 +2054,10 @@ class AutodetectorTests(TestCase):
         """
         before = self.make_project_state([self.author_empty])
         after = self.make_project_state([self.author_with_biography_non_blank])
-        autodetector = MigrationAutodetector(before, after, MigrationQuestioner())
+        autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
-        # need to check for questioner call
-        self.assertTrue(mocked_ask_method.called)
         self.assertEqual(mocked_ask_method.call_count, 2)
+        # Right number/type of migrations?
         self.assertNumberMigrations(changes, 'testapp', 1)
         self.assertOperationTypes(changes, 'testapp', 0, ["AddField", "AddField"])
         self.assertOperationAttributes(changes, 'testapp', 0, 0)

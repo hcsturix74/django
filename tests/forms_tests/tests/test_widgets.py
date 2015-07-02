@@ -18,7 +18,7 @@ from django.forms import (
 from django.forms.widgets import (
     ChoiceFieldRenderer, ChoiceInput, RadioFieldRenderer,
 )
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, override_settings
 from django.utils import six, translation
 from django.utils.dates import MONTHS_AP
 from django.utils.encoding import force_text, python_2_unicode_compatible
@@ -27,7 +27,7 @@ from django.utils.safestring import SafeData, mark_safe
 from ..models import Article
 
 
-class FormsWidgetTests(TestCase):
+class FormsWidgetTests(SimpleTestCase):
     # Each Widget class corresponds to an HTML form widget. A Widget knows how to
     # render itself, given a field name and some data. Widgets don't perform
     # validation.
@@ -1173,7 +1173,7 @@ class NullBooleanSelectLazyForm(Form):
 
 
 @override_settings(USE_L10N=True)
-class FormsI18NWidgetsTests(TestCase):
+class FormsI18NWidgetsTests(SimpleTestCase):
     def setUp(self):
         super(FormsI18NWidgetsTests, self).setUp()
         translation.activate('de-at')
@@ -1261,7 +1261,7 @@ class SelectAndTextWidget(MultiWidget):
     choices = property(_get_choices, _set_choices)
 
 
-class WidgetTests(TestCase):
+class WidgetTests(SimpleTestCase):
     def test_12048(self):
         # See ticket #12048.
         w1 = SelectAndTextWidget(choices=[1, 2, 3])
@@ -1303,7 +1303,7 @@ class FakeFieldFile(object):
         return self.url
 
 
-class ClearableFileInputTests(TestCase):
+class ClearableFileInputTests(SimpleTestCase):
     def test_clear_input_renders(self):
         """
         A ClearableFileInput with is_required False and rendered with
@@ -1344,6 +1344,25 @@ class ClearableFileInputTests(TestCase):
         self.assertIn('something&lt;div onclick=&quot;alert(&#39;oops&#39;)&quot;&gt;.jpg', output)
         self.assertIn('my&lt;div&gt;file', output)
         self.assertNotIn('my<div>file', output)
+
+    def test_html_does_not_mask_exceptions(self):
+        """
+        A ClearableFileInput should not mask exceptions produced while
+        checking that it has a value.
+        """
+        @python_2_unicode_compatible
+        class FailingURLFieldFile(object):
+            @property
+            def url(self):
+                raise RuntimeError('Canary')
+
+            def __str__(self):
+                return 'value'
+
+        widget = ClearableFileInput()
+        field = FailingURLFieldFile()
+        with self.assertRaisesMessage(RuntimeError, 'Canary'):
+            widget.render('myfile', field)
 
     def test_clear_input_renders_only_if_not_required(self):
         """
@@ -1417,7 +1436,7 @@ class GetDate(Form):
     mydate = DateField(widget=SelectDateWidget)
 
 
-class SelectDateWidgetTests(TestCase):
+class SelectDateWidgetTests(SimpleTestCase):
 
     # The forms library comes with some extra, higher-level Field and Widget
     def test_selectdate(self):

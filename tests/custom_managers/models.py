@@ -66,6 +66,12 @@ class BaseCustomManager(models.Manager):
 CustomManager = BaseCustomManager.from_queryset(CustomQuerySet)
 
 
+class CustomInitQuerySet(models.QuerySet):
+    # QuerySet with an __init__() method that takes an additional argument.
+    def __init__(self, custom_optional_arg=None, model=None, query=None, using=None, hints=None):
+        super(CustomInitQuerySet, self).__init__(model=model, query=query, using=using, hints=hints)
+
+
 class DeconstructibleCustomManager(BaseCustomManager.from_queryset(CustomQuerySet)):
 
     def __init__(self, a, b, c=1, d=2):
@@ -99,6 +105,7 @@ class Person(models.Model):
 
     custom_queryset_default_manager = CustomQuerySet.as_manager()
     custom_queryset_custom_manager = CustomManager('hello')
+    custom_init_queryset_manager = CustomInitQuerySet.as_manager()
 
     def __str__(self):
         return "%s %s" % (self.first_name, self.last_name)
@@ -194,3 +201,15 @@ class OneToOneRestrictedModel(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class AbstractPerson(models.Model):
+    abstract_persons = models.Manager()
+    objects = models.CharField(max_length=30)
+
+    class Meta:
+        abstract = True
+
+
+class PersonFromAbstract(AbstractPerson):
+    pass

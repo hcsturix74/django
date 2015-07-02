@@ -165,6 +165,7 @@ class SessionTestsMixin(object):
         self.session.flush()
         self.assertFalse(self.session.exists(prev_key))
         self.assertNotEqual(self.session.session_key, prev_key)
+        self.assertIsNone(self.session.session_key)
         self.assertTrue(self.session.modified)
         self.assertTrue(self.session.accessed)
 
@@ -196,6 +197,21 @@ class SessionTestsMixin(object):
             # Some backends leave a stale cache entry for the invalid
             # session key; make sure that entry is manually deleted
             session.delete('1')
+
+    def test_session_key_empty_string_invalid(self):
+        """Falsey values (Such as an empty string) are rejected."""
+        self.session._session_key = ''
+        self.assertIsNone(self.session.session_key)
+
+    def test_session_key_too_short_invalid(self):
+        """Strings shorter than 8 characters are rejected."""
+        self.session._session_key = '1234567'
+        self.assertIsNone(self.session.session_key)
+
+    def test_session_key_valid_string_saved(self):
+        """Strings of length 8 and up are accepted and stored."""
+        self.session._session_key = '12345678'
+        self.assertEqual(self.session.session_key, '12345678')
 
     def test_session_key_is_read_only(self):
         def set_session_key(session):
@@ -607,6 +623,35 @@ class SessionMiddlewareTests(TestCase):
         self.assertEqual(
             'Set-Cookie: {}={}; expires=Thu, 01-Jan-1970 00:00:00 GMT; '
             'Max-Age=0; Path=/'.format(
+                settings.SESSION_COOKIE_NAME,
+                '""' if sys.version_info >= (3, 5) else '',
+            ),
+            str(response.cookies[settings.SESSION_COOKIE_NAME])
+        )
+
+    @override_settings(SESSION_COOKIE_DOMAIN='.example.local')
+    def test_session_delete_on_end_with_custom_domain(self):
+        request = RequestFactory().get('/')
+        response = HttpResponse('Session test')
+        middleware = SessionMiddleware()
+
+        # Before deleting, there has to be an existing cookie
+        request.COOKIES[settings.SESSION_COOKIE_NAME] = 'abc'
+
+        # Simulate a request that ends the session
+        middleware.process_request(request)
+        request.session.flush()
+
+        # Handle the response through the middleware
+        response = middleware.process_response(request, response)
+
+        # Check that the cookie was deleted, not recreated.
+        # A deleted cookie header with a custom domain looks like:
+        #  Set-Cookie: sessionid=; Domain=.example.local;
+        #              expires=Thu, 01-Jan-1970 00:00:00 GMT; Max-Age=0; Path=/
+        self.assertEqual(
+            'Set-Cookie: {}={}; Domain=.example.local; expires=Thu, '
+            '01-Jan-1970 00:00:00 GMT; Max-Age=0; Path=/'.format(
                 settings.SESSION_COOKIE_NAME,
                 '""' if sys.version_info >= (3, 5) else '',
             ),

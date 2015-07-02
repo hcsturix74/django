@@ -378,7 +378,7 @@ class BaseModelForm(BaseForm):
             # from validation.
             else:
                 form_field = self.fields[field]
-                field_value = self.cleaned_data.get(field, None)
+                field_value = self.cleaned_data.get(field)
                 if not f.blank and not form_field.required and field_value in form_field.empty_values:
                     exclude.append(f.name)
         return exclude
@@ -411,10 +411,6 @@ class BaseModelForm(BaseForm):
         opts = self._meta
 
         exclude = self._get_validation_exclusions()
-        # a subset of `exclude` which won't have the InlineForeignKeyField
-        # if we're adding a new object since that value doesn't exist
-        # until after the new instance is saved to the database.
-        construct_instance_exclude = list(exclude)
 
         # Foreign Keys being used to represent inline relationships
         # are excluded from basic field value validation. This is for two
@@ -425,12 +421,10 @@ class BaseModelForm(BaseForm):
         # so this can't be part of _get_validation_exclusions().
         for name, field in self.fields.items():
             if isinstance(field, InlineForeignKeyField):
-                if self.cleaned_data.get(name) is not None and self.cleaned_data[name]._state.adding:
-                    construct_instance_exclude.append(name)
                 exclude.append(name)
 
         # Update the model instance with self.cleaned_data.
-        self.instance = construct_instance(self, self.instance, opts.fields, construct_instance_exclude)
+        self.instance = construct_instance(self, self.instance, opts.fields, exclude)
 
         try:
             self.instance.full_clean(exclude=exclude, validate_unique=False)
@@ -935,10 +929,15 @@ class BaseInlineFormSet(BaseModelFormSet):
             if self.fk.remote_field.field_name != self.fk.remote_field.model._meta.pk.name:
                 kwargs['to_field'] = self.fk.remote_field.field_name
 
-        # If we're adding a new object, ignore a parent's auto-generated pk
+        # If we're adding a new object, ignore a parent's auto-generated key
         # as it will be regenerated on the save request.
-        if self.instance._state.adding and form._meta.model._meta.pk.has_default():
-            self.instance.pk = None
+        if self.instance._state.adding:
+            if kwargs.get('to_field') is not None:
+                to_field = self.instance._meta.get_field(kwargs['to_field'])
+            else:
+                to_field = self.instance._meta.pk
+            if to_field.has_default():
+                setattr(self.instance, to_field.attname, None)
 
         form.fields[name] = InlineForeignKeyField(self.instance, **kwargs)
 
@@ -973,12 +972,12 @@ def _get_foreign_key(parent_model, model, fk_name=None, can_fail=False):
                     (fk.remote_field.model != parent_model and
                      fk.remote_field.model not in parent_model._meta.get_parent_list()):
                 raise ValueError(
-                    "fk_name '%s' is not a ForeignKey to '%s.%s'."
-                    % (fk_name, parent_model._meta.app_label, parent_model._meta.object_name))
+                    "fk_name '%s' is not a ForeignKey to '%s'." % (fk_name, parent_model._meta.label)
+                )
         elif len(fks_to_parent) == 0:
             raise ValueError(
-                "'%s.%s' has no field named '%s'."
-                % (model._meta.app_label, model._meta.object_name, fk_name))
+                "'%s' has no field named '%s'." % (model._meta.label, fk_name)
+            )
     else:
         # Try to discover what the ForeignKey from model to parent_model is
         fks_to_parent = [
@@ -993,20 +992,16 @@ def _get_foreign_key(parent_model, model, fk_name=None, can_fail=False):
             if can_fail:
                 return
             raise ValueError(
-                "'%s.%s' has no ForeignKey to '%s.%s'." % (
-                    model._meta.app_label,
-                    model._meta.object_name,
-                    parent_model._meta.app_label,
-                    parent_model._meta.object_name,
+                "'%s' has no ForeignKey to '%s'." % (
+                    model._meta.label,
+                    parent_model._meta.label,
                 )
             )
         else:
             raise ValueError(
-                "'%s.%s' has more than one ForeignKey to '%s.%s'." % (
-                    model._meta.app_label,
-                    model._meta.object_name,
-                    parent_model._meta.app_label,
-                    parent_model._meta.object_name,
+                "'%s' has more than one ForeignKey to '%s'." % (
+                    model._meta.label,
+                    parent_model._meta.label,
                 )
             )
     return fk

@@ -8,7 +8,7 @@ all about the internals of models in order to get the information it needs.
 """
 import copy
 import warnings
-from collections import Mapping, OrderedDict
+from collections import Iterator, Mapping, OrderedDict
 from itertools import chain, count, product
 from string import ascii_uppercase
 
@@ -18,7 +18,9 @@ from django.db.models.aggregates import Count
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import Col, Ref
 from django.db.models.fields.related_lookups import MultiColSource
-from django.db.models.query_utils import Q, PathInfo, refs_expression
+from django.db.models.query_utils import (
+    Q, PathInfo, check_rel_lookup_compatibility, refs_expression,
+)
 from django.db.models.sql.constants import (
     INNER, LOUTER, ORDER_DIR, ORDER_PATTERN, QUERY_TERMS, SINGLE,
 )
@@ -29,7 +31,7 @@ from django.db.models.sql.where import (
     AND, OR, ExtraWhere, NothingNode, WhereNode,
 )
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.deprecation import RemovedInDjango110Warning
 from django.utils.encoding import force_text
 from django.utils.tree import Node
 
@@ -86,13 +88,29 @@ class RawQuery(object):
     def __repr__(self):
         return "<RawQuery: %s>" % self
 
+    @property
+    def params_type(self):
+        return dict if isinstance(self.params, Mapping) else tuple
+
     def __str__(self):
-        _type = dict if isinstance(self.params, Mapping) else tuple
-        return self.sql % _type(self.params)
+        return self.sql % self.params_type(self.params)
 
     def _execute_query(self):
-        self.cursor = connections[self.using].cursor()
-        self.cursor.execute(self.sql, self.params)
+        connection = connections[self.using]
+
+        # Adapt parameters to the database, as much as possible considering
+        # that the target type isn't known. See #17755.
+        params_type = self.params_type
+        adapter = connection.ops.adapt_unknown_value
+        if params_type is tuple:
+            params = tuple(adapter(val) for val in self.params)
+        elif params_type is dict:
+            params = dict((key, adapter(val)) for key, val in six.iteritems(self.params))
+        else:
+            raise RuntimeError("Unexpected params type: %s" % params_type)
+
+        self.cursor = connection.cursor()
+        self.cursor.execute(self.sql, params)
 
 
 class Query(object):
@@ -200,7 +218,7 @@ class Query(object):
     def aggregates(self):
         warnings.warn(
             "The aggregates property is deprecated. Use annotations instead.",
-            RemovedInDjango20Warning, stacklevel=2)
+            RemovedInDjango110Warning, stacklevel=2)
         return self.annotations
 
     def __str__(self):
@@ -473,6 +491,9 @@ class Query(object):
     def has_results(self, using):
         q = self.clone()
         if not q.distinct:
+            if q.group_by is True:
+                q.add_fields((f.attname for f in self.model._meta.concrete_fields), False)
+                q.set_group_by()
             q.clear_select_clause()
         q.clear_ordering(True)
         q.set_limits(high=1)
@@ -954,7 +975,7 @@ class Query(object):
     def add_aggregate(self, aggregate, model, alias, is_summary):
         warnings.warn(
             "add_aggregate() is deprecated. Use add_annotation() instead.",
-            RemovedInDjango20Warning, stacklevel=2)
+            RemovedInDjango110Warning, stacklevel=2)
         self.add_annotation(aggregate, alias, is_summary)
 
     def add_annotation(self, annotation, alias, is_summary=False):
@@ -1007,9 +1028,9 @@ class Query(object):
         """
         lookup_splitted = lookup.split(LOOKUP_SEP)
         if self._annotations:
-            aggregate, aggregate_lookups = refs_expression(lookup_splitted, self.annotations)
-            if aggregate:
-                return aggregate_lookups, (), aggregate
+            expression, expression_lookups = refs_expression(lookup_splitted, self.annotations)
+            if expression:
+                return expression_lookups, (), expression
         _, field, _, lookup_parts = self.names_to_path(lookup_splitted, self.get_meta())
         field_parts = lookup_splitted[0:len(lookup_splitted) - len(lookup_parts)]
         if len(lookup_parts) == 0:
@@ -1021,15 +1042,13 @@ class Query(object):
                     (lookup, self.get_meta().model.__name__))
         return lookup_parts, field_parts, False
 
-    def check_query_object_type(self, value, opts):
+    def check_query_object_type(self, value, opts, field):
         """
         Checks whether the object passed while querying is of the correct type.
         If not, it raises a ValueError specifying the wrong object.
         """
         if hasattr(value, '_meta'):
-            if not (value._meta.concrete_model == opts.concrete_model
-                    or opts.concrete_model in value._meta.get_parent_list()
-                    or value._meta.concrete_model in opts.get_parent_list()):
+            if not check_rel_lookup_compatibility(value._meta.model, opts, field):
                 raise ValueError(
                     'Cannot query "%s": Must be "%s" instance.' %
                     (value, opts.object_name))
@@ -1042,16 +1061,16 @@ class Query(object):
             # QuerySets implement is_compatible_query_object_type() to
             # determine compatibility with the given field.
             if hasattr(value, 'is_compatible_query_object_type'):
-                if not value.is_compatible_query_object_type(opts):
+                if not value.is_compatible_query_object_type(opts, field):
                     raise ValueError(
                         'Cannot use QuerySet for "%s": Use a QuerySet for "%s".' %
                         (value.model._meta.model_name, opts.object_name)
                     )
             elif hasattr(value, '_meta'):
-                self.check_query_object_type(value, opts)
+                self.check_query_object_type(value, opts, field)
             elif hasattr(value, '__iter__'):
                 for v in value:
-                    self.check_query_object_type(v, opts)
+                    self.check_query_object_type(v, opts, field)
 
     def build_lookup(self, lookups, lhs, rhs):
         """
@@ -1095,7 +1114,7 @@ class Query(object):
                 (name, lhs.output_field.__class__.__name__))
 
     def build_filter(self, filter_expr, branch_negated=False, current_negated=False,
-                     can_reuse=None, connector=AND, allow_joins=True):
+                     can_reuse=None, connector=AND, allow_joins=True, split_subq=True):
         """
         Builds a WhereNode for a single filter clause, but doesn't add it
         to this Query. Query.add_q() will then add this filter to the where
@@ -1121,10 +1140,12 @@ class Query(object):
         query. However, if the filter isn't added to the query then the caller
         is responsible for unreffing the joins used.
         """
+        if isinstance(filter_expr, dict):
+            raise FieldError("Cannot parse keyword query as dict")
         arg, value = filter_expr
         if not arg:
             raise FieldError("Cannot parse keyword query %r" % arg)
-        lookups, parts, reffed_aggregate = self.solve_lookup_type(arg)
+        lookups, parts, reffed_expression = self.solve_lookup_type(arg)
         if not allow_joins and len(parts) > 1:
             raise FieldError("Joined field references are not permitted in this query")
 
@@ -1133,19 +1154,22 @@ class Query(object):
         value, lookups, used_joins = self.prepare_lookup_value(value, lookups, can_reuse, allow_joins)
 
         clause = self.where_class()
-        if reffed_aggregate:
-            condition = self.build_lookup(lookups, reffed_aggregate, value)
+        if reffed_expression:
+            condition = self.build_lookup(lookups, reffed_expression, value)
             clause.add(condition, AND)
             return clause, []
 
         opts = self.get_meta()
         alias = self.get_initial_alias()
-        allow_many = not branch_negated
+        allow_many = not branch_negated or not split_subq
 
         try:
             field, sources, opts, join_list, path = self.setup_joins(
                 parts, opts, alias, can_reuse=can_reuse, allow_many=allow_many)
 
+            # Prevent iterator from being consumed by check_related_objects()
+            if isinstance(value, Iterator):
+                value = list(value)
             self.check_related_objects(field, value, opts)
 
             # split_exclude() needs to know which joins were generated for the
@@ -1218,7 +1242,7 @@ class Query(object):
         self.demote_joins(existing_inner)
 
     def _add_q(self, q_object, used_aliases, branch_negated=False,
-               current_negated=False, allow_joins=True):
+               current_negated=False, allow_joins=True, split_subq=True):
         """
         Adds a Q-object to the current filter.
         """
@@ -1232,12 +1256,14 @@ class Query(object):
             if isinstance(child, Node):
                 child_clause, needed_inner = self._add_q(
                     child, used_aliases, branch_negated,
-                    current_negated, allow_joins)
+                    current_negated, allow_joins, split_subq)
                 joinpromoter.add_votes(needed_inner)
             else:
                 child_clause, needed_inner = self.build_filter(
                     child, can_reuse=used_aliases, branch_negated=branch_negated,
-                    current_negated=current_negated, connector=connector, allow_joins=allow_joins)
+                    current_negated=current_negated, connector=connector,
+                    allow_joins=allow_joins, split_subq=split_subq,
+                )
                 joinpromoter.add_votes(needed_inner)
             if child_clause:
                 target_clause.add(child_clause, connector)
@@ -1780,7 +1806,7 @@ class Query(object):
     def set_aggregate_mask(self, names):
         warnings.warn(
             "set_aggregate_mask() is deprecated. Use set_annotation_mask() instead.",
-            RemovedInDjango20Warning, stacklevel=2)
+            RemovedInDjango110Warning, stacklevel=2)
         self.set_annotation_mask(names)
 
     def set_annotation_mask(self, names):
@@ -1794,7 +1820,7 @@ class Query(object):
     def append_aggregate_mask(self, names):
         warnings.warn(
             "append_aggregate_mask() is deprecated. Use append_annotation_mask() instead.",
-            RemovedInDjango20Warning, stacklevel=2)
+            RemovedInDjango110Warning, stacklevel=2)
         self.append_annotation_mask(names)
 
     def append_annotation_mask(self, names):
@@ -1837,7 +1863,7 @@ class Query(object):
     def aggregate_select(self):
         warnings.warn(
             "aggregate_select() is deprecated. Use annotation_select() instead.",
-            RemovedInDjango20Warning, stacklevel=2)
+            RemovedInDjango110Warning, stacklevel=2)
         return self.annotation_select
 
     @property

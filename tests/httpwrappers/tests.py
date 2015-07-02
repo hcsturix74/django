@@ -6,6 +6,7 @@ import json
 import os
 import pickle
 import unittest
+import uuid
 
 from django.core.exceptions import SuspiciousOperation
 from django.core.serializers.json import DjangoJSONEncoder
@@ -17,7 +18,7 @@ from django.http import (
     HttpResponseRedirect, JsonResponse, QueryDict, SimpleCookie,
     StreamingHttpResponse, parse_cookie,
 )
-from django.test import TestCase
+from django.test import SimpleTestCase
 from django.utils import six
 from django.utils._os import upath
 from django.utils.encoding import force_text, smart_str
@@ -140,13 +141,13 @@ class QueryDictTests(unittest.TestCase):
             self.assertTrue(q.has_key('foo'))
         self.assertIn('foo', q)
 
-        self.assertListEqual(sorted(list(six.iteritems(q))),
+        self.assertListEqual(sorted(six.iteritems(q)),
                              [('foo', 'another'), ('name', 'john')])
-        self.assertListEqual(sorted(list(six.iterlists(q))),
+        self.assertListEqual(sorted(six.iterlists(q)),
                              [('foo', ['bar', 'baz', 'another']), ('name', ['john'])])
-        self.assertListEqual(sorted(list(six.iterkeys(q))),
+        self.assertListEqual(sorted(six.iterkeys(q)),
                              ['foo', 'name'])
-        self.assertListEqual(sorted(list(six.itervalues(q))),
+        self.assertListEqual(sorted(six.itervalues(q)),
                              ['another', 'john'])
 
         q.update({'foo': 'hello'})
@@ -425,7 +426,7 @@ class HttpResponseTests(unittest.TestCase):
                               HttpResponsePermanentRedirect, url)
 
 
-class HttpResponseSubclassesTests(TestCase):
+class HttpResponseSubclassesTests(SimpleTestCase):
     def test_redirect(self):
         response = HttpResponseRedirect('/redirected/')
         self.assertEqual(response.status_code, 302)
@@ -460,7 +461,7 @@ class HttpResponseSubclassesTests(TestCase):
         self.assertContains(response, 'Only the GET method is allowed', status_code=405)
 
 
-class JsonResponseTests(TestCase):
+class JsonResponseTests(SimpleTestCase):
     def test_json_response_non_ascii(self):
         data = {'key': 'łóżko'}
         response = JsonResponse(data)
@@ -480,6 +481,11 @@ class JsonResponseTests(TestCase):
         response = JsonResponse(['foo', 'bar'], safe=False)
         self.assertEqual(json.loads(response.content.decode()), ['foo', 'bar'])
 
+    def test_json_response_uuid(self):
+        u = uuid.uuid4()
+        response = JsonResponse(u, safe=False)
+        self.assertEqual(json.loads(response.content.decode()), str(u))
+
     def test_json_response_custom_encoder(self):
         class CustomDjangoJSONEncoder(DjangoJSONEncoder):
             def encode(self, o):
@@ -489,7 +495,7 @@ class JsonResponseTests(TestCase):
         self.assertEqual(json.loads(response.content.decode()), {'foo': 'bar'})
 
 
-class StreamingHttpResponseTests(TestCase):
+class StreamingHttpResponseTests(SimpleTestCase):
     def test_streaming_response(self):
         r = StreamingHttpResponse(iter(['hello', 'world']))
 
@@ -554,7 +560,7 @@ class StreamingHttpResponseTests(TestCase):
         self.assertEqual(r.getvalue(), b'helloworld')
 
 
-class FileCloseTests(TestCase):
+class FileCloseTests(SimpleTestCase):
 
     def setUp(self):
         # Disable the request_finished signal during this test

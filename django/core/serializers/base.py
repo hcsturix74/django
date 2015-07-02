@@ -17,7 +17,14 @@ class SerializationError(Exception):
 
 class DeserializationError(Exception):
     """Something bad happened during deserialization."""
-    pass
+
+    @classmethod
+    def WithData(cls, original_exc, model, fk, field_value):
+        """
+        Factory method for creating a deserialization error which has a more
+        explanatory messsage.
+        """
+        return cls("%s: (%s:pk=%s) field_value was '%s'" % (original_exc, model, fk, field_value))
 
 
 class Serializer(object):
@@ -156,14 +163,14 @@ class DeserializedObject(object):
         self.m2m_data = m2m_data
 
     def __repr__(self):
-        return "<DeserializedObject: %s.%s(pk=%s)>" % (
-            self.object._meta.app_label, self.object._meta.object_name, self.object.pk)
+        return "<DeserializedObject: %s(pk=%s)>" % (
+            self.object._meta.label, self.object.pk)
 
-    def save(self, save_m2m=True, using=None):
+    def save(self, save_m2m=True, using=None, **kwargs):
         # Call save on the Model baseclass directly. This bypasses any
         # model-defined save. The save is also forced to be raw.
         # raw=True is passed to any pre/post_save signals.
-        models.Model.save_base(self.object, using=using, raw=True)
+        models.Model.save_base(self.object, using=using, raw=True, **kwargs)
         if self.m2m_data and save_m2m:
             for accessor_name, object_list in self.m2m_data.items():
                 setattr(self.object, accessor_name, object_list)

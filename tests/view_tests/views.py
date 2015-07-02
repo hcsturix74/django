@@ -52,7 +52,7 @@ def raises400(request):
 
 
 def raises403(request):
-    raise PermissionDenied
+    raise PermissionDenied("Insufficient Permissions")
 
 
 def raises404(request):
@@ -102,7 +102,7 @@ def render_no_template(request):
 
 
 def send_log(request, exc_info):
-    logger = logging.getLogger('django.request')
+    logger = logging.getLogger('django')
     # The default logging config has a logging filter to ensure admin emails are
     # only sent with DEBUG=False, but since someone might choose to remove that
     # filter, we still want to be able to test the behavior of error emails

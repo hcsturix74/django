@@ -9,7 +9,7 @@ from django.forms import (
     CharField, FileField, Form, ModelChoiceField, ModelForm,
 )
 from django.forms.models import ModelFormMetaclass
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import six
 
 from ..models import (
@@ -222,7 +222,7 @@ class FormsModelTestCase(TestCase):
         self.assertEqual(obj.def_date, datetime.date(1999, 3, 2))
 
 
-class RelatedModelFormTests(TestCase):
+class RelatedModelFormTests(SimpleTestCase):
     def test_invalid_loading_order(self):
         """
         Test for issue 10405
@@ -334,7 +334,7 @@ class EmptyLabelTestCase(TestCase):
 
     def test_get_display_value_on_none(self):
         m = ChoiceModel.objects.create(name='test', choice='', choice_integer=None)
-        self.assertEqual(None, m.choice_integer)
+        self.assertIsNone(m.choice_integer)
         self.assertEqual('No Preference', m.get_choice_integer_display())
 
     def test_html_rendering_of_prepopulated_models(self):

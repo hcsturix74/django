@@ -4,13 +4,13 @@ from django.contrib.postgres.aggregates import (
     RegrSYY, StatAggregate, StringAgg,
 )
 from django.db.models.expressions import F, Value
-from django.test import TestCase
 from django.test.utils import Approximate
 
+from . import PostgreSQLTestCase
 from .models import AggregateTestModel, StatTestModel
 
 
-class TestGeneralAggregate(TestCase):
+class TestGeneralAggregate(PostgreSQLTestCase):
     @classmethod
     def setUpTestData(cls):
         AggregateTestModel.objects.create(boolean_field=True, char_field='Foo1', integer_field=0)
@@ -111,7 +111,7 @@ class TestGeneralAggregate(TestCase):
         self.assertEqual(values, {'stringagg': ''})
 
 
-class TestStatisticsAggregate(TestCase):
+class TestStatisticsAggregate(PostgreSQLTestCase):
     @classmethod
     def setUpTestData(cls):
         StatTestModel.objects.create(

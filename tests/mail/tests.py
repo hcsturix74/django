@@ -695,10 +695,7 @@ class BaseEmailBackendTests(HeadersCheckMixin, object):
         Test that connection can be closed (even when not explicitly opened)
         """
         conn = mail.get_connection(username='', password='')
-        try:
-            conn.close()
-        except Exception as e:
-            self.fail("close() unexpectedly raised an exception: %s" % e)
+        conn.close()
 
     def test_use_as_contextmanager(self):
         """
@@ -868,6 +865,9 @@ class FakeSMTPServer(smtpd.SMTPServer, threading.Thread):
 
     def __init__(self, *args, **kwargs):
         threading.Thread.__init__(self)
+        # New kwarg added in Python 3.5; default switching to False in 3.6.
+        if sys.version_info >= (3, 5):
+            kwargs['decode_data'] = True
         smtpd.SMTPServer.__init__(self, *args, **kwargs)
         self._sink = []
         self.active = False
@@ -1143,7 +1143,4 @@ class SMTPBackendStoppedServerTest(SMTPBackendTestsBase):
         backend = smtp.EmailBackend(username='', password='')
         backend.open()
         self.server.stop()
-        try:
-            backend.close()
-        except Exception as e:
-            self.fail("close() unexpectedly raised an exception: %s" % e)
+        backend.close()

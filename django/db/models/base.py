@@ -326,9 +326,7 @@ class ModelBase(type):
         if cls.__doc__ is None:
             cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.name for f in opts.fields))
 
-        get_absolute_url_override = settings.ABSOLUTE_URL_OVERRIDES.get(
-            '%s.%s' % (opts.app_label, opts.model_name)
-        )
+        get_absolute_url_override = settings.ABSOLUTE_URL_OVERRIDES.get(opts.label_lower)
         if get_absolute_url_override:
             setattr(cls, 'get_absolute_url', get_absolute_url_override)
 
@@ -835,7 +833,7 @@ class Model(six.with_metaclass(ModelBase)):
 
         collector = Collector(using=using)
         collector.collect([self], keep_parents=keep_parents)
-        collector.delete()
+        return collector.delete()
 
     delete.alters_data = True
 
@@ -878,7 +876,7 @@ class Model(six.with_metaclass(ModelBase)):
     def prepare_database_save(self, field):
         if self.pk is None:
             raise ValueError("Unsaved model instance %r cannot be used in an ORM query." % self)
-        return getattr(self, field.remote_field.field_name)
+        return getattr(self, field.remote_field.get_related_field().attname)
 
     def clean(self):
         """
@@ -1248,10 +1246,7 @@ class Model(six.with_metaclass(ModelBase)):
                 errors.append(
                     checks.Error(
                         "The model has two many-to-many relations through "
-                        "the intermediate model '%s.%s'." % (
-                            f.remote_field.through._meta.app_label,
-                            f.remote_field.through._meta.object_name
-                        ),
+                        "the intermediate model '%s'." % f.remote_field.through._meta.label,
                         hint=None,
                         obj=cls,
                         id='models.E003',

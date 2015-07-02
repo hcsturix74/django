@@ -9,6 +9,7 @@ from unittest import skipIf
 
 from django.conf import settings
 from django.core import mail
+from django.core.exceptions import PermissionDenied
 from django.http import (
     FileResponse, HttpRequest, HttpResponse, HttpResponsePermanentRedirect,
     HttpResponseRedirect, StreamingHttpResponse,
@@ -19,8 +20,7 @@ from django.middleware.common import (
 )
 from django.middleware.gzip import GZipMiddleware
 from django.middleware.http import ConditionalGetMiddleware
-from django.test import RequestFactory, TestCase, override_settings
-from django.test.utils import patch_logger
+from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.utils import six
 from django.utils.encoding import force_str
 from django.utils.six.moves import range
@@ -28,7 +28,7 @@ from django.utils.six.moves.urllib.parse import quote
 
 
 @override_settings(ROOT_URLCONF='middleware.urls')
-class CommonMiddlewareTest(TestCase):
+class CommonMiddlewareTest(SimpleTestCase):
 
     rf = RequestFactory()
 
@@ -253,12 +253,10 @@ class CommonMiddlewareTest(TestCase):
 
     @override_settings(DISALLOWED_USER_AGENTS=[re.compile(r'foo')])
     def test_disallowed_user_agents(self):
-        with patch_logger('django.request', 'warning') as log_messages:
-            request = self.rf.get('/slash')
-            request.META['HTTP_USER_AGENT'] = 'foo'
-            r = CommonMiddleware().process_request(request)
-            self.assertEqual(r.status_code, 403)
-            self.assertEqual(log_messages, ['Forbidden (User agent): /slash'])
+        request = self.rf.get('/slash')
+        request.META['HTTP_USER_AGENT'] = 'foo'
+        with self.assertRaisesMessage(PermissionDenied, 'Forbidden user agent'):
+            CommonMiddleware().process_request(request)
 
     def test_non_ascii_query_string_does_not_crash(self):
         """Regression test for #15152"""
@@ -289,7 +287,7 @@ class CommonMiddlewareTest(TestCase):
     IGNORABLE_404_URLS=[re.compile(r'foo')],
     MANAGERS=['PHB@dilbert.com'],
 )
-class BrokenLinkEmailsMiddlewareTest(TestCase):
+class BrokenLinkEmailsMiddlewareTest(SimpleTestCase):
 
     rf = RequestFactory()
 
@@ -320,6 +318,16 @@ class BrokenLinkEmailsMiddlewareTest(TestCase):
         BrokenLinkEmailsMiddleware().process_response(self.req, self.resp)
         self.assertEqual(len(mail.outbox), 1)
 
+    @skipIf(six.PY3, "HTTP_USER_AGENT is str type on Python 3")
+    def test_404_error_nonascii_user_agent(self):
+        # Such user agent strings should not happen, but anyway, if it happens,
+        # let's not crash
+        self.req.META['HTTP_REFERER'] = '/another/url/'
+        self.req.META['HTTP_USER_AGENT'] = b'\xd0\xbb\xd0\xb8\xff\xff'
+        BrokenLinkEmailsMiddleware().process_response(self.req, self.resp)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('User agent: \u043b\u0438\ufffd\ufffd\n', mail.outbox[0].body)
+
     def test_custom_request_checker(self):
         class SubclassedMiddleware(BrokenLinkEmailsMiddleware):
             ignored_user_agent_patterns = (re.compile(r'Spider.*'),
@@ -343,7 +351,7 @@ class BrokenLinkEmailsMiddlewareTest(TestCase):
 
 
 @override_settings(ROOT_URLCONF='middleware.cond_get_urls')
-class ConditionalGetMiddlewareTest(TestCase):
+class ConditionalGetMiddlewareTest(SimpleTestCase):
 
     def setUp(self):
         self.req = RequestFactory().get('/')
@@ -482,7 +490,7 @@ class ConditionalGetMiddlewareTest(TestCase):
         self.assertEqual(self.resp.status_code, 400)
 
 
-class XFrameOptionsMiddlewareTest(TestCase):
+class XFrameOptionsMiddlewareTest(SimpleTestCase):
     """
     Tests for the X-Frame-Options clickjacking prevention middleware.
     """
@@ -600,7 +608,7 @@ class XFrameOptionsMiddlewareTest(TestCase):
             self.assertEqual(r['X-Frame-Options'], 'DENY')
 
 
-class GZipMiddlewareTest(TestCase):
+class GZipMiddlewareTest(SimpleTestCase):
     """
     Tests the GZip middleware.
     """
@@ -707,7 +715,7 @@ class GZipMiddlewareTest(TestCase):
 
 
 @override_settings(USE_ETAGS=True)
-class ETagGZipMiddlewareTest(TestCase):
+class ETagGZipMiddlewareTest(SimpleTestCase):
     """
     Tests if the ETag middleware behaves correctly with GZip middleware.
     """

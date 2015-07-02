@@ -1,17 +1,22 @@
 from django.apps.registry import Apps
 from django.db import models
-from django.db.migrations.operations import DeleteModel, RemoveField
-from django.db.migrations.state import (
-    InvalidBasesError, ModelState, ProjectState, get_related_models_recursive,
+from django.db.migrations.exceptions import InvalidBasesError
+from django.db.migrations.operations import (
+    AddField, AlterField, DeleteModel, RemoveField,
 )
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.db.migrations.state import (
+    ModelState, ProjectState, get_related_models_recursive,
+)
+from django.test import SimpleTestCase, override_settings
+from django.utils import six
 
 from .models import (
     FoodManager, FoodQuerySet, ModelWithCustomBase, NoMigrationFoodManager,
+    UnicodeModel,
 )
 
 
-class StateTests(TestCase):
+class StateTests(SimpleTestCase):
     """
     Tests state construction, rendering and modification by operations.
     """
@@ -141,6 +146,7 @@ class StateTests(TestCase):
 
         # The default manager is used in migrations
         self.assertEqual([name for name, mgr in food_state.managers], ['food_mgr'])
+        self.assertTrue(all(isinstance(name, six.text_type) for name, mgr in food_state.managers))
         self.assertEqual(food_state.managers[0][1].args, ('a', 'b', 1, 2))
 
         # No explicit managers defined. Migrations will fall back to the default
@@ -150,13 +156,51 @@ class StateTests(TestCase):
         # default
         self.assertEqual([name for name, mgr in food_no_default_manager_state.managers],
                          ['food_no_mgr', 'food_mgr'])
+        self.assertTrue(all(isinstance(name, six.text_type) for name, mgr in food_no_default_manager_state.managers))
         self.assertEqual(food_no_default_manager_state.managers[0][1].__class__, models.Manager)
         self.assertIsInstance(food_no_default_manager_state.managers[1][1], FoodManager)
 
         self.assertEqual([name for name, mgr in food_order_manager_state.managers],
                          ['food_mgr1', 'food_mgr2'])
+        self.assertTrue(all(isinstance(name, six.text_type) for name, mgr in food_order_manager_state.managers))
         self.assertEqual([mgr.args for name, mgr in food_order_manager_state.managers],
                          [('a', 'b', 1, 2), ('x', 'y', 3, 4)])
+
+    def test_custom_default_manager_added_to_the_model_state(self):
+        """
+        When the default manager of the model is a custom manager,
+        it needs to be added to the model state.
+        """
+        new_apps = Apps(['migrations'])
+        custom_manager = models.Manager()
+
+        class Author(models.Model):
+            objects = models.TextField()
+            authors = custom_manager
+
+            class Meta:
+                app_label = 'migrations'
+                apps = new_apps
+
+        project_state = ProjectState.from_apps(new_apps)
+        author_state = project_state.models['migrations', 'author']
+        self.assertEqual(author_state.managers, [('authors', custom_manager)])
+
+    def test_apps_bulk_update(self):
+        """
+        StateApps.bulk_update() should update apps.ready to False and reset
+        the value afterwards.
+        """
+        project_state = ProjectState()
+        apps = project_state.apps
+        with apps.bulk_update():
+            self.assertFalse(apps.ready)
+        self.assertTrue(apps.ready)
+        with self.assertRaises(ValueError):
+            with apps.bulk_update():
+                self.assertFalse(apps.ready)
+                raise ValueError()
+        self.assertTrue(apps.ready)
 
     def test_render(self):
         """
@@ -201,7 +245,7 @@ class StateTests(TestCase):
                 # The ordering we really want is objects, mgr1, mgr2
                 ('default', base_mgr),
                 ('food_mgr2', mgr2),
-                ('food_mgr1', mgr1),
+                (b'food_mgr1', mgr1),
             ]
         ))
 
@@ -215,6 +259,7 @@ class StateTests(TestCase):
         managers = sorted(Food._meta.managers)
         self.assertEqual([mgr.name for _, mgr, _ in managers],
                          ['default', 'food_mgr1', 'food_mgr2'])
+        self.assertTrue(all(isinstance(mgr.name, six.text_type) for _, mgr, _ in managers))
         self.assertEqual([mgr.__class__ for _, mgr, _ in managers],
                          [models.Manager, FoodManager, FoodManager])
         self.assertIs(managers[0][1], Food._default_manager)
@@ -366,20 +411,80 @@ class StateTests(TestCase):
         project_state.add_model(ModelState.from_model(B))
         self.assertEqual(len(project_state.apps.get_models()), 2)
 
+    def test_add_relations(self):
+        """
+        #24573 - Adding relations to existing models should reload the
+        referenced models too.
+        """
+        new_apps = Apps()
+
+        class A(models.Model):
+            class Meta:
+                app_label = 'something'
+                apps = new_apps
+
+        class B(A):
+            class Meta:
+                app_label = 'something'
+                apps = new_apps
+
+        class C(models.Model):
+            class Meta:
+                app_label = 'something'
+                apps = new_apps
+
+        project_state = ProjectState()
+        project_state.add_model(ModelState.from_model(A))
+        project_state.add_model(ModelState.from_model(B))
+        project_state.add_model(ModelState.from_model(C))
+
+        project_state.apps  # We need to work with rendered models
+
+        old_state = project_state.clone()
+        model_a_old = old_state.apps.get_model('something', 'A')
+        model_b_old = old_state.apps.get_model('something', 'B')
+        model_c_old = old_state.apps.get_model('something', 'C')
+        # Check that the relations between the old models are correct
+        self.assertIs(model_a_old._meta.get_field('b').related_model, model_b_old)
+        self.assertIs(model_b_old._meta.get_field('a_ptr').related_model, model_a_old)
+
+        operation = AddField('c', 'to_a', models.OneToOneField('something.A', related_name='from_c'))
+        operation.state_forwards('something', project_state)
+        model_a_new = project_state.apps.get_model('something', 'A')
+        model_b_new = project_state.apps.get_model('something', 'B')
+        model_c_new = project_state.apps.get_model('something', 'C')
+
+        # Check that all models have changed
+        self.assertIsNot(model_a_old, model_a_new)
+        self.assertIsNot(model_b_old, model_b_new)
+        self.assertIsNot(model_c_old, model_c_new)
+        # Check that the relations between the old models still hold
+        self.assertIs(model_a_old._meta.get_field('b').related_model, model_b_old)
+        self.assertIs(model_b_old._meta.get_field('a_ptr').related_model, model_a_old)
+        # Check that the relations between the new models correct
+        self.assertIs(model_a_new._meta.get_field('b').related_model, model_b_new)
+        self.assertIs(model_b_new._meta.get_field('a_ptr').related_model, model_a_new)
+        self.assertIs(model_a_new._meta.get_field('from_c').related_model, model_c_new)
+        self.assertIs(model_c_new._meta.get_field('to_a').related_model, model_a_new)
+
     def test_remove_relations(self):
         """
         #24225 - Tests that relations between models are updated while
         remaining the relations and references for models of an old state.
         """
+        new_apps = Apps()
+
         class A(models.Model):
             class Meta:
                 app_label = "something"
+                apps = new_apps
 
         class B(models.Model):
             to_a = models.ForeignKey(A)
 
             class Meta:
                 app_label = "something"
+                apps = new_apps
 
         def get_model_a(state):
             return [mod for mod in state.apps.get_models() if mod._meta.model_name == 'a'][0]
@@ -412,6 +517,55 @@ class StateTests(TestCase):
         self.assertIsNot(model_a_old, model_a_new)
         self.assertEqual(len(model_a_old._meta.related_objects), 1)
         self.assertEqual(len(model_a_new._meta.related_objects), 0)
+
+    def test_self_relation(self):
+        """
+        #24513 - Modifying an object pointing to itself would cause it to be
+        rendered twice and thus breaking its related M2M through objects.
+        """
+        class A(models.Model):
+            to_a = models.ManyToManyField('something.A', symmetrical=False)
+
+            class Meta:
+                app_label = "something"
+
+        def get_model_a(state):
+            return [mod for mod in state.apps.get_models() if mod._meta.model_name == 'a'][0]
+
+        project_state = ProjectState()
+        project_state.add_model((ModelState.from_model(A)))
+        self.assertEqual(len(get_model_a(project_state)._meta.related_objects), 1)
+        old_state = project_state.clone()
+
+        operation = AlterField(
+            model_name="a",
+            name="to_a",
+            field=models.ManyToManyField("something.A", symmetrical=False, blank=True)
+        )
+        # At this point the model would be rendered twice causing its related
+        # M2M through objects to point to an old copy and thus breaking their
+        # attribute lookup.
+        operation.state_forwards("something", project_state)
+
+        model_a_old = get_model_a(old_state)
+        model_a_new = get_model_a(project_state)
+        self.assertIsNot(model_a_old, model_a_new)
+
+        # Tests that the old model's _meta is still consistent
+        field_to_a_old = model_a_old._meta.get_field("to_a")
+        self.assertEqual(field_to_a_old.m2m_field_name(), "from_a")
+        self.assertEqual(field_to_a_old.m2m_reverse_field_name(), "to_a")
+        self.assertIs(field_to_a_old.related_model, model_a_old)
+        self.assertIs(field_to_a_old.remote_field.through._meta.get_field('to_a').related_model, model_a_old)
+        self.assertIs(field_to_a_old.remote_field.through._meta.get_field('from_a').related_model, model_a_old)
+
+        # Tests that the new model's _meta is still consistent
+        field_to_a_new = model_a_new._meta.get_field("to_a")
+        self.assertEqual(field_to_a_new.m2m_field_name(), "from_a")
+        self.assertEqual(field_to_a_new.m2m_reverse_field_name(), "to_a")
+        self.assertIs(field_to_a_new.related_model, model_a_new)
+        self.assertIs(field_to_a_new.remote_field.through._meta.get_field('to_a').related_model, model_a_new)
+        self.assertIs(field_to_a_new.remote_field.through._meta.get_field('from_a').related_model, model_a_new)
 
     def test_equality(self):
         """
@@ -616,7 +770,7 @@ class StateTests(TestCase):
         self.assertEqual(list(choices_field.choices), choices)
 
 
-class ModelStateTests(TestCase):
+class ModelStateTests(SimpleTestCase):
     def test_custom_model_base(self):
         state = ModelState.from_model(ModelWithCustomBase)
         self.assertEqual(state.bases, (models.Model,))
@@ -626,6 +780,21 @@ class ModelStateTests(TestCase):
         field.model = models.Model
         with self.assertRaisesMessage(ValueError,
                 'ModelState.fields cannot be bound to a model - "field" is.'):
+            ModelState('app', 'Model', [('field', field)])
+
+    def test_sanity_check_to(self):
+        field = models.ForeignKey(UnicodeModel)
+        with self.assertRaisesMessage(ValueError,
+                'ModelState.fields cannot refer to a model class - "field.to" does. '
+                'Use a string reference instead.'):
+            ModelState('app', 'Model', [('field', field)])
+
+    def test_sanity_check_through(self):
+        field = models.ManyToManyField('UnicodeModel')
+        field.remote_field.through = UnicodeModel
+        with self.assertRaisesMessage(ValueError,
+                'ModelState.fields cannot refer to a model class - "field.through" does. '
+                'Use a string reference instead.'):
             ModelState('app', 'Model', [('field', field)])
 
     def test_fields_immutability(self):

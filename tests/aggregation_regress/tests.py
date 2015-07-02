@@ -17,7 +17,7 @@ from django.utils import six
 
 from .models import (
     Alfa, Author, Book, Bravo, Charlie, Clues, Entries, HardbackBook, ItemTag,
-    Publisher, Store, WithManualPK,
+    Publisher, SelfRefFK, Store, WithManualPK,
 )
 
 
@@ -347,6 +347,20 @@ class AggregationTests(TestCase):
         self.assertEqual(
             Book.objects.annotate(c=Count('authors')).values('c').aggregate(Max('c')),
             {'c__max': 3}
+        )
+
+    def test_decimal_aggregate_annotation_filter(self):
+        """
+        Filtering on an aggregate annotation with Decimal values should work.
+        Requires special handling on SQLite (#18247).
+        """
+        self.assertEqual(
+            len(Author.objects.annotate(sum=Sum('book_contact_set__price')).filter(sum__gt=Decimal(40))),
+            1
+        )
+        self.assertEqual(
+            len(Author.objects.annotate(sum=Sum('book_contact_set__price')).filter(sum__lte=Decimal(40))),
+            4
         )
 
     def test_field_error(self):
@@ -1277,3 +1291,15 @@ class JoinPromotionTests(TestCase):
     def test_non_nullable_fk_not_promoted(self):
         qs = Book.objects.annotate(Count('contact__name'))
         self.assertIn(' INNER JOIN ', str(qs.query))
+
+
+class SelfReferentialFKTests(TestCase):
+    def test_ticket_24748(self):
+        t1 = SelfRefFK.objects.create(name='t1')
+        SelfRefFK.objects.create(name='t2', parent=t1)
+        SelfRefFK.objects.create(name='t3', parent=t1)
+        self.assertQuerysetEqual(
+            SelfRefFK.objects.annotate(num_children=Count('children')).order_by('name'),
+            [('t1', 2), ('t2', 0), ('t3', 0)],
+            lambda x: (x.name, x.num_children)
+        )

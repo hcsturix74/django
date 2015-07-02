@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import copy
 from collections import OrderedDict
+from contextlib import contextmanager
 
 from django.apps import AppConfig
 from django.apps.registry import Apps, apps as global_apps
@@ -17,9 +18,7 @@ from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 from django.utils.version import get_docs_version
 
-
-class InvalidBasesError(ValueError):
-    pass
+from .exceptions import InvalidBasesError
 
 
 def _get_app_label_and_model_name(model, app_label=''):
@@ -83,6 +82,9 @@ class ProjectState(object):
         del self.models[app_label, model_name]
         if 'apps' in self.__dict__:  # hasattr would cache the property
             self.apps.unregister_model(app_label, model_name)
+            # Need to do this explicitly since unregister_model() doesn't clear
+            # the cache automatically (#24513)
+            self.apps.clear_cache()
 
     def reload_model(self, app_label, model_name):
         if 'apps' in self.__dict__:  # hasattr would cache the property
@@ -97,36 +99,43 @@ class ProjectState(object):
 
             # Get all outgoing references from the model to be rendered
             model_state = self.models[(app_label, model_name)]
+            # Directly related models are the models pointed to by ForeignKeys,
+            # OneToOneFields, and ManyToManyFields.
+            direct_related_models = set()
             for name, field in model_state.fields:
                 if field.is_relation:
                     if field.remote_field.model == RECURSIVE_RELATIONSHIP_CONSTANT:
                         continue
-                    rel_app_label, rel_model_name = _get_app_label_and_model_name(field.remote_field.model, app_label)
-                    related_models.add((rel_app_label, rel_model_name.lower()))
+                    rel_app_label, rel_model_name = _get_app_label_and_model_name(field.related_model, app_label)
+                    direct_related_models.add((rel_app_label, rel_model_name.lower()))
+
+            # For all direct related models recursively get all related models.
+            related_models.update(direct_related_models)
+            for rel_app_label, rel_model_name in direct_related_models:
+                try:
+                    rel_model = self.apps.get_model(rel_app_label, rel_model_name)
+                except LookupError:
+                    pass
+                else:
+                    related_models.update(get_related_models_recursive(rel_model))
+
+            # Include the model itself
+            related_models.add((app_label, model_name))
 
             # Unregister all related models
-            for rel_app_label, rel_model_name in related_models:
-                self.apps.unregister_model(rel_app_label, rel_model_name)
+            with self.apps.bulk_update():
+                for rel_app_label, rel_model_name in related_models:
+                    self.apps.unregister_model(rel_app_label, rel_model_name)
 
-            # Unregister the current model
-            self.apps.unregister_model(app_label, model_name)
-
+            states_to_be_rendered = []
             # Gather all models states of those models that will be rerendered.
             # This includes:
-            # 1. The current model
-            try:
-                model_state = self.models[app_label, model_name]
-            except KeyError:
-                states_to_be_rendered = []
-            else:
-                states_to_be_rendered = [model_state]
-
-            # 2. All related models of unmigrated apps
+            # 1. All related models of unmigrated apps
             for model_state in self.apps.real_models:
                 if (model_state.app_label, model_state.name_lower) in related_models:
                     states_to_be_rendered.append(model_state)
 
-            # 3. All related models of migrated apps
+            # 2. All related models of migrated apps
             for rel_app_label, rel_model_name in related_models:
                 try:
                     model_state = self.models[rel_app_label, rel_model_name]
@@ -227,6 +236,18 @@ class StateApps(Apps):
             labels = (".".join(model_key) for model_key in self._pending_operations)
             raise ValueError(msg % ", ".join(labels))
 
+    @contextmanager
+    def bulk_update(self):
+        # Avoid clearing each model's cache for each change. Instead, clear
+        # all caches when we're finished updating the model instances.
+        ready = self.ready
+        self.ready = False
+        try:
+            yield
+        finally:
+            self.ready = ready
+            self.clear_cache()
+
     def render_multiple(self, model_states):
         # We keep trying to render the models in a loop, ignoring invalid
         # base errors, until the size of the unrendered models doesn't
@@ -235,26 +256,23 @@ class StateApps(Apps):
         if not model_states:
             return
         # Prevent that all model caches are expired for each render.
-        self.ready = False
-        unrendered_models = model_states
-        while unrendered_models:
-            new_unrendered_models = []
-            for model in unrendered_models:
-                try:
-                    model.render(self)
-                except InvalidBasesError:
-                    new_unrendered_models.append(model)
-            if len(new_unrendered_models) == len(unrendered_models):
-                self.ready = True
-                raise InvalidBasesError(
-                    "Cannot resolve bases for %r\nThis can happen if you are inheriting models from an "
-                    "app with migrations (e.g. contrib.auth)\n in an app with no migrations; see "
-                    "https://docs.djangoproject.com/en/%s/topics/migrations/#dependencies "
-                    "for more" % (new_unrendered_models, get_docs_version())
-                )
-            unrendered_models = new_unrendered_models
-        self.ready = True
-        self.clear_cache()
+        with self.bulk_update():
+            unrendered_models = model_states
+            while unrendered_models:
+                new_unrendered_models = []
+                for model in unrendered_models:
+                    try:
+                        model.render(self)
+                    except InvalidBasesError:
+                        new_unrendered_models.append(model)
+                if len(new_unrendered_models) == len(unrendered_models):
+                    raise InvalidBasesError(
+                        "Cannot resolve bases for %r\nThis can happen if you are inheriting models from an "
+                        "app with migrations (e.g. contrib.auth)\n in an app with no migrations; see "
+                        "https://docs.djangoproject.com/en/%s/topics/migrations/#dependencies "
+                        "for more" % (new_unrendered_models, get_docs_version())
+                    )
+                unrendered_models = new_unrendered_models
 
     def clone(self):
         """
@@ -282,7 +300,6 @@ class StateApps(Apps):
             del self.app_configs[app_label].models[model_name]
         except KeyError:
             pass
-        self.clear_cache()
 
 
 class ModelState(object):
@@ -306,11 +323,22 @@ class ModelState(object):
         # Sanity-check that fields is NOT a dict. It must be ordered.
         if isinstance(self.fields, dict):
             raise ValueError("ModelState.fields cannot be a dict - it must be a list of 2-tuples.")
-        # Sanity-check that fields are NOT already bound to a model.
         for name, field in fields:
+            # Sanity-check that fields are NOT already bound to a model.
             if hasattr(field, 'model'):
                 raise ValueError(
                     'ModelState.fields cannot be bound to a model - "%s" is.' % name
+                )
+            # Sanity-check that relation fields are NOT referring to a model class.
+            if field.is_relation and hasattr(field.related_model, '_meta'):
+                raise ValueError(
+                    'ModelState.fields cannot refer to a model class - "%s.to" does. '
+                    'Use a string reference instead.' % name
+                )
+            if field.many_to_many and hasattr(field.remote_field.through, '_meta'):
+                raise ValueError(
+                    'ModelState.fields cannot refer to a model class - "%s.through" does. '
+                    'Use a string reference instead.' % name
                 )
 
     @cached_property
@@ -329,23 +357,20 @@ class ModelState(object):
                 continue
             if isinstance(field, OrderWrt):
                 continue
-            name, path, args, kwargs = field.deconstruct()
-            field_class = import_string(path)
+            name = force_text(field.name, strings_only=True)
             try:
-                fields.append((name, field_class(*args, **kwargs)))
+                fields.append((name, field.clone()))
             except TypeError as e:
-                raise TypeError("Couldn't reconstruct field %s on %s.%s: %s" % (
+                raise TypeError("Couldn't reconstruct field %s on %s: %s" % (
                     name,
-                    model._meta.app_label,
-                    model._meta.object_name,
+                    model._meta.label,
                     e,
                 ))
         if not exclude_rels:
             for field in model._meta.local_many_to_many:
-                name, path, args, kwargs = field.deconstruct()
-                field_class = import_string(path)
+                name = force_text(field.name, strings_only=True)
                 try:
-                    fields.append((name, field_class(*args, **kwargs)))
+                    fields.append((name, field.clone()))
                 except TypeError as e:
                     raise TypeError("Couldn't reconstruct m2m field %s on %s: %s" % (
                         name,
@@ -395,7 +420,7 @@ class ModelState(object):
         # Make our record
         bases = tuple(
             (
-                "%s.%s" % (base._meta.app_label, base._meta.model_name)
+                base._meta.label_lower
                 if hasattr(base, "_meta") else
                 base
             )
@@ -406,7 +431,7 @@ class ModelState(object):
             bases = (models.Model,)
 
         # Constructs all managers on the model
-        managers = {}
+        managers_mapping = {}
 
         def reconstruct_manager(mgr):
             as_manager, manager_path, qs_path, args, kwargs = mgr.deconstruct()
@@ -418,16 +443,17 @@ class ModelState(object):
                 instance = manager_class(*args, **kwargs)
             # We rely on the ordering of the creation_counter of the original
             # instance
-            managers[mgr.name] = (mgr.creation_counter, instance)
+            name = force_text(mgr.name)
+            managers_mapping[name] = (mgr.creation_counter, instance)
 
         if hasattr(model, "_default_manager"):
-            default_manager_name = model._default_manager.name
+            default_manager_name = force_text(model._default_manager.name)
             # Make sure the default manager is always the first
             if model._default_manager.use_in_migrations:
                 reconstruct_manager(model._default_manager)
             else:
                 # Force this manager to be the first and thus default
-                managers[default_manager_name] = (0, models.Manager())
+                managers_mapping[default_manager_name] = (0, models.Manager())
             # Sort all managers by their creation counter
             for _, manager, _ in sorted(model._meta.managers):
                 if manager.name == "_base_manager" or not manager.use_in_migrations:
@@ -437,9 +463,12 @@ class ModelState(object):
             # instance for further processing
             managers = [
                 (name, instance) for name, (cc, instance) in
-                sorted(managers.items(), key=lambda v: v[1])
+                sorted(managers_mapping.items(), key=lambda v: v[1])
             ]
-            if managers == [(default_manager_name, models.Manager())]:
+            # If the only manager on the model is the default manager defined
+            # by Django (`objects = models.Manager()`), this manager will not
+            # be added to the model state.
+            if managers == [('objects', models.Manager())]:
                 managers = []
         else:
             managers = []
@@ -471,18 +500,12 @@ class ModelState(object):
             }
         return value
 
-    def construct_fields(self):
-        "Deep-clone the fields using deconstruction"
-        for name, field in self.fields:
-            _, path, args, kwargs = field.deconstruct()
-            field_class = import_string(path)
-            yield name, field_class(*args, **kwargs)
-
     def construct_managers(self):
         "Deep-clone the managers using deconstruction"
         # Sort all managers by their creation counter
         sorted_managers = sorted(self.managers, key=lambda v: v[1].creation_counter)
         for mgr_name, manager in sorted_managers:
+            mgr_name = force_text(mgr_name)
             as_manager, manager_path, qs_path, args, kwargs = manager.deconstruct()
             if as_manager:
                 qs_class = import_string(qs_path)
@@ -496,10 +519,10 @@ class ModelState(object):
         return self.__class__(
             app_label=self.app_label,
             name=self.name,
-            fields=list(self.construct_fields()),
+            fields=list(self.fields),
             options=dict(self.options),
             bases=self.bases,
-            managers=list(self.construct_managers()),
+            managers=list(self.managers),
         )
 
     def render(self, apps):
@@ -517,7 +540,7 @@ class ModelState(object):
         except LookupError:
             raise InvalidBasesError("Cannot resolve one or more bases from %r" % (self.bases,))
         # Turn fields into a dict for the body, add other bits
-        body = dict(self.construct_fields())
+        body = {name: field.clone() for name, field in self.fields}
         body['Meta'] = meta
         body['__module__'] = "__fake__"
 

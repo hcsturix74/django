@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import logging
+import logging.config  # needed when logging_config doesn't start with logging.config
 import sys
 import warnings
 
@@ -40,17 +41,7 @@ DEFAULT_LOGGING = {
     },
     'loggers': {
         'django': {
-            'handlers': ['console'],
-        },
-        'django.request': {
-            'handlers': ['mail_admins'],
-            'level': 'ERROR',
-            'propagate': False,
-        },
-        'django.security': {
-            'handlers': ['mail_admins'],
-            'level': 'ERROR',
-            'propagate': False,
+            'handlers': ['console', 'mail_admins'],
         },
         'py.warnings': {
             'handlers': ['console'],

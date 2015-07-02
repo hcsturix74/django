@@ -507,6 +507,15 @@ class Func(Expression):
         template = template or self.extra.get('template', self.template)
         return template % self.extra, params
 
+    def as_sqlite(self, *args, **kwargs):
+        sql, params = self.as_sql(*args, **kwargs)
+        try:
+            if self.output_field.get_internal_type() == 'DecimalField':
+                sql = 'CAST(%s AS NUMERIC)' % sql
+        except FieldError:
+            pass
+        return sql, params
+
     def copy(self):
         copy = super(Func, self).copy()
         copy.source_expressions = self.source_expressions[:]
@@ -778,6 +787,11 @@ class Case(Expression):
         for pos, case in enumerate(c.cases):
             c.cases[pos] = case.resolve_expression(query, allow_joins, reuse, summarize, for_save)
         c.default = c.default.resolve_expression(query, allow_joins, reuse, summarize, for_save)
+        return c
+
+    def copy(self):
+        c = super(Case, self).copy()
+        c.cases = c.cases[:]
         return c
 
     def as_sql(self, compiler, connection, template=None, extra=None):

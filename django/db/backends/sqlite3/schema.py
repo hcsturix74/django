@@ -1,4 +1,3 @@
-import _sqlite3  # isort:skip
 import codecs
 import contextlib
 import copy
@@ -34,9 +33,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             c.execute('PRAGMA foreign_keys = %s' % int(self._initial_pragma_fk))
 
     def quote_value(self, value):
+        # The backend "mostly works" without this function and there are use
+        # cases for compiling Python without the sqlite3 libraries (e.g.
+        # security hardening).
+        import sqlite3
         try:
-            value = _sqlite3.adapt(value)
-        except _sqlite3.ProgrammingError:
+            value = sqlite3.adapt(value)
+        except sqlite3.ProgrammingError:
             pass
         # Manual emulation of SQLite parameter quoting
         if isinstance(value, type(True)):
@@ -168,27 +171,25 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             yield
             model._meta.db_table = original_table_name
 
-        # Rename the old table to something temporary
-        old_table_name = model._meta.db_table + "__old"
-        with altered_table_name(model, old_table_name):
+        with altered_table_name(model, model._meta.db_table + "__old"):
+            # Rename the old table to make way for the new
             self.alter_db_table(model, temp_model._meta.db_table, model._meta.db_table)
 
-        # Create a new table with that format. We remove things from the
-        # deferred SQL that match our table name, too
-        self.deferred_sql = [x for x in self.deferred_sql if temp_model._meta.db_table not in x]
-        self.create_model(temp_model)
+            # Create a new table with the updated schema. We remove things
+            # from the deferred SQL that match our table name, too
+            self.deferred_sql = [x for x in self.deferred_sql if temp_model._meta.db_table not in x]
+            self.create_model(temp_model)
 
-        # Copy data from the old table
-        field_maps = list(mapping.items())
-        self.execute("INSERT INTO %s (%s) SELECT %s FROM %s" % (
-            self.quote_name(temp_model._meta.db_table),
-            ', '.join(self.quote_name(x) for x, y in field_maps),
-            ', '.join(y for x, y in field_maps),
-            self.quote_name(old_table_name),
-        ))
+            # Copy data from the old table into the new table
+            field_maps = list(mapping.items())
+            self.execute("INSERT INTO %s (%s) SELECT %s FROM %s" % (
+                self.quote_name(temp_model._meta.db_table),
+                ', '.join(self.quote_name(x) for x, y in field_maps),
+                ', '.join(y for x, y in field_maps),
+                self.quote_name(model._meta.db_table),
+            ))
 
-        # Delete the old table
-        with altered_table_name(model, old_table_name):
+            # Delete the old table
             self.delete_model(model, handle_autom2m=False)
 
         # Run deferred SQL on correct table

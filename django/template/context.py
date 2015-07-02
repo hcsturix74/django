@@ -2,7 +2,7 @@ import warnings
 from contextlib import contextmanager
 from copy import copy
 
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.deprecation import RemovedInDjango110Warning
 
 # Hard-coded processor for easier use of CSRF protection.
 _builtin_context_processors = ('django.template.context_processors.csrf',)
@@ -136,7 +136,7 @@ class Context(BaseContext):
             warnings.warn(
                 "The current_app argument of Context is deprecated. Use "
                 "RequestContext and set the current_app attribute of its "
-                "request instead.", RemovedInDjango20Warning, stacklevel=2)
+                "request instead.", RemovedInDjango110Warning, stacklevel=2)
         self.autoescape = autoescape
         self._current_app = current_app
         self.use_l10n = use_l10n
@@ -171,8 +171,7 @@ class Context(BaseContext):
         "Pushes other_dict to the stack of dictionaries in the Context"
         if not hasattr(other_dict, '__getitem__'):
             raise TypeError('other_dict must be a mapping (dictionary-like) object.')
-        self.dicts.append(other_dict)
-        return other_dict
+        return ContextDict(self, other_dict)
 
 
 class RenderContext(BaseContext):
@@ -222,12 +221,18 @@ class RequestContext(Context):
             warnings.warn(
                 "The current_app argument of RequestContext is deprecated. "
                 "Set the current_app attribute of its request instead.",
-                RemovedInDjango20Warning, stacklevel=2)
+                RemovedInDjango110Warning, stacklevel=2)
         self._current_app = current_app
         self.request = request
         self._processors = () if processors is None else tuple(processors)
         self._processors_index = len(self.dicts)
-        self.update({})         # placeholder for context processors output
+
+        # placeholder for context processors output
+        self.update({})
+
+        # empty dict for any new modifications
+        # (so that context processors don't overwrite them)
+        self.update({})
 
     @contextmanager
     def bind_template(self, template):

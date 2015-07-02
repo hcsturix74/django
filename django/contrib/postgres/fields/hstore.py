@@ -55,18 +55,9 @@ class HStoreField(Field):
 
 HStoreField.register_lookup(lookups.DataContains)
 HStoreField.register_lookup(lookups.ContainedBy)
-
-
-@HStoreField.register_lookup
-class HasKeyLookup(lookups.PostgresSimpleLookup):
-    lookup_name = 'has_key'
-    operator = '?'
-
-
-@HStoreField.register_lookup
-class HasKeysLookup(lookups.PostgresSimpleLookup):
-    lookup_name = 'has_keys'
-    operator = '?&'
+HStoreField.register_lookup(lookups.HasKey)
+HStoreField.register_lookup(lookups.HasKeys)
+HStoreField.register_lookup(lookups.HasAnyKeys)
 
 
 class KeyTransform(Transform):
@@ -78,7 +69,7 @@ class KeyTransform(Transform):
 
     def as_sql(self, compiler, connection):
         lhs, params = compiler.compile(self.lhs)
-        return "%s -> '%s'" % (lhs, self.key_name), params
+        return "(%s -> '%s')" % (lhs, self.key_name), params
 
 
 class KeyTransformFactory(object):

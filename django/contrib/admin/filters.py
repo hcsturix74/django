@@ -85,7 +85,7 @@ class SimpleListFilter(ListFilter):
         query string for this filter, if any. If the value wasn't provided then
         returns None.
         """
-        return self.used_parameters.get(self.parameter_name, None)
+        return self.used_parameters.get(self.parameter_name)
 
     def lookups(self, request, model_admin):
         """
@@ -174,6 +174,7 @@ class RelatedFieldListFilter(FieldListFilter):
         else:
             self.lookup_title = other_model._meta.verbose_name
         self.title = self.lookup_title
+        self.empty_value_display = model_admin.get_empty_value_display()
 
     def has_output(self):
         if self.field.null:
@@ -189,7 +190,6 @@ class RelatedFieldListFilter(FieldListFilter):
         return field.get_choices(include_blank=False)
 
     def choices(self, cl):
-        from django.contrib.admin.views.main import EMPTY_CHANGELIST_VALUE
         yield {
             'selected': self.lookup_val is None and not self.lookup_val_isnull,
             'query_string': cl.get_query_string({},
@@ -210,7 +210,7 @@ class RelatedFieldListFilter(FieldListFilter):
                 'query_string': cl.get_query_string({
                     self.lookup_kwarg_isnull: 'True',
                 }, [self.lookup_kwarg]),
-                'display': EMPTY_CHANGELIST_VALUE,
+                'display': self.empty_value_display,
             }
 
 FieldListFilter.register(lambda f: f.remote_field, RelatedFieldListFilter)
@@ -220,8 +220,8 @@ class BooleanFieldListFilter(FieldListFilter):
     def __init__(self, field, request, params, model, model_admin, field_path):
         self.lookup_kwarg = '%s__exact' % field_path
         self.lookup_kwarg2 = '%s__isnull' % field_path
-        self.lookup_val = request.GET.get(self.lookup_kwarg, None)
-        self.lookup_val2 = request.GET.get(self.lookup_kwarg2, None)
+        self.lookup_val = request.GET.get(self.lookup_kwarg)
+        self.lookup_val2 = request.GET.get(self.lookup_kwarg2)
         super(BooleanFieldListFilter, self).__init__(field,
             request, params, model, model_admin, field_path)
 
@@ -350,9 +350,9 @@ class AllValuesFieldListFilter(FieldListFilter):
     def __init__(self, field, request, params, model, model_admin, field_path):
         self.lookup_kwarg = field_path
         self.lookup_kwarg_isnull = '%s__isnull' % field_path
-        self.lookup_val = request.GET.get(self.lookup_kwarg, None)
-        self.lookup_val_isnull = request.GET.get(self.lookup_kwarg_isnull,
-                                                 None)
+        self.lookup_val = request.GET.get(self.lookup_kwarg)
+        self.lookup_val_isnull = request.GET.get(self.lookup_kwarg_isnull)
+        self.empty_value_display = model_admin.get_empty_value_display()
         parent_model, reverse_path = reverse_field_path(model, field_path)
         # Obey parent ModelAdmin queryset when deciding which options to show
         if model == parent_model:
@@ -370,7 +370,6 @@ class AllValuesFieldListFilter(FieldListFilter):
         return [self.lookup_kwarg, self.lookup_kwarg_isnull]
 
     def choices(self, cl):
-        from django.contrib.admin.views.main import EMPTY_CHANGELIST_VALUE
         yield {
             'selected': (self.lookup_val is None
                 and self.lookup_val_isnull is None),
@@ -397,7 +396,7 @@ class AllValuesFieldListFilter(FieldListFilter):
                 'query_string': cl.get_query_string({
                     self.lookup_kwarg_isnull: 'True',
                 }, [self.lookup_kwarg]),
-                'display': EMPTY_CHANGELIST_VALUE,
+                'display': self.empty_value_display,
             }
 
 FieldListFilter.register(lambda f: True, AllValuesFieldListFilter)
